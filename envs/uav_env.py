@@ -273,11 +273,17 @@ class UAVEnv(gym.Env):
 
         M = len(self.targets)
 
+        raw_reward = 0.0
         # Eq. 19
         if N0 == M:
-            return 2.0 * J_X  # 全覆盖翻倍
+            raw_reward = 2.0 * J_X  # 全覆盖翻倍
         else:
-            return J_X * (float(N0) / float(M))  # 覆盖率折损
+            raw_reward = J_X * (float(N0) / float(M))  # 覆盖率折损
+
+        # 【关键修复】 Reward Scaling
+        # 将 Reward 除以一个常数（例如 10.0 或 20.0），使其数值保持在个位数
+        # 这对 PPO 的收敛至关重要
+        return raw_reward / 20.0
 
     def step(self, action):
         curr_uav = self.uavs[self.uav_idx]

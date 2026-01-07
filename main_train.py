@@ -44,7 +44,7 @@ def train():
     # ================= 3. 主训练循环 (Algorithm 1) =================
     for i_episode in range(1, cfg.MAX_EPISODES + 1):
 
-        state = env.reset(full_reset=(i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
+        state = env.reset(full_reset=(i_episode == 1 or i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
         current_ep_reward = 0
         done = False
 

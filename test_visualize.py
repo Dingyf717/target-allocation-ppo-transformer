@@ -16,7 +16,9 @@ def visualize_decision(env, agent, model_path):
     print(f"正在加载模型: {model_path} ...")
 
     # 加载模型参数
-    checkpoint = torch.load(model_path)
+    # checkpoint = torch.load(model_path)
+    # 强制映射到 CPU，这样无论原模型是在 GPU 还是 CPU 上训练的都能跑
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     agent.policy.load_state_dict(checkpoint)
     agent.policy.eval()  # 切换到评估模式
 
