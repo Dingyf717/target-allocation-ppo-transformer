@@ -44,18 +44,7 @@ def train():
     # ================= 3. 主训练循环 (Algorithm 1) =================
     for i_episode in range(1, cfg.MAX_EPISODES + 1):
 
-        # 【核心修正】 Algorithm 1 Line 6-7
-        # 每 200 episodes 重置一次环境布局 (E, U, T)
-        # 其余时间保持布局不变，只重置决策状态
-        if i_episode == 1 or i_episode % 200 == 0:
-            # 假设你在 uav_env.reset() 中增加了一个参数 reset_layout
-            # 或者 env.reset() 默认只重置状态，env.reset_layout() 重置布局
-            # 这里演示最通用的写法：
-            # 如果 uav_env.reset() 每次都随机，你需要修改 uav_env.py
-            # 建议：修改 uav_env.reset(full_reset=False)
-            state = env.reset(full_reset=True)
-        else:
-            state = env.reset(full_reset=False)
+        state = env.reset(full_reset=(i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
         current_ep_reward = 0
         done = False
 
@@ -71,8 +60,14 @@ def train():
             state = next_state
             current_ep_reward += reward
 
-        # 回合结束，强制更新剩余数据 (保证 On-Policy)
-        agent.update()
+            # --- 回合结束后的处理 ---
+
+        # 【关键修改】只有当 Buffer 里的数据积累得足够多时，才触发更新
+        # 这样保证了 Buffer 里包含的永远是“完整的 Episode”，不会出现截断
+        # 建议阈值设为 Batch_Size 的 4~8 倍（例如 256~512 步）
+        # 这样如果是短 Episode (30步) 会攒好几个才更新；如果是长 Episode (300步) 每次都会更新
+        if len(agent.buffer['states']) >= cfg.BATCH_SIZE * 4:
+            agent.update()
 
         # --- 记录与日志 ---
         ep_rewards.append(current_ep_reward)

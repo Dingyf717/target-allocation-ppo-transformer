@@ -24,14 +24,6 @@ class PPOAgent:
             {'params': self.policy.critic_net.parameters(), 'lr': cfg.LR_CRITIC},  # 包含 Critic 的 Embedding 和 Transformer
         ])
 
-        # 简单起见，如果不想细分参数组，使用原版也可以，但需注意 Table I 区分了 Actor/Critic 学习率
-        # 原代码:
-        # self.optimizer = optim.Adam([{'params': self.policy.parameters(), 'lr': cfg.LR_ACTOR}])
-        # 建议修正为支持不同学习率（如上）或暂时保持原状，这里重点修 GAE。
-
-        # 为了严格复现 Table I: Critic lr=1e-3, Actor lr=2e-4
-        # 由于是共享参数网络，通常共享部分使用较小学习率(Actor LR)，Head部分分开。
-        # 这里为保持代码简洁，暂时恢复为统一优化器，但在 update 中计算 Loss 时会体现差异。
 
         # 旧策略网络
         self.policy_old = TransformerActorCritic().to(self.device)
