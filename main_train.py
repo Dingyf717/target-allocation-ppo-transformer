@@ -61,24 +61,15 @@ def train():
 
         # --- 一个回合 (Episode) ---
         while not done:
-            # a. 智能体选择动作
+            # a. select action
             action = agent.select_action(state)
-
-            # b. 环境执行动作
+            # b. step
             next_state, reward, done, _ = env.step(action)
-
-            # c. 存储 Transition
+            # c. store
             agent.store_transition(reward, done)
-
-            # d. 更新状态 & 累计奖励
+            # d. update state
             state = next_state
             current_ep_reward += reward
-
-            # e. 如果 Buffer 满了或者回合结束，触发 PPO 更新
-            # (这里简化处理：PPO通常是攒够一定步数更新，或者是回合结束更新)
-            # 我们选择：每回合结束后更新，或者 Buffer 超过 2000 步更新
-            if len(agent.buffer['states']) >= cfg.BATCH_SIZE * 4:
-                agent.update()
 
         # 回合结束，强制更新剩余数据 (保证 On-Policy)
         agent.update()

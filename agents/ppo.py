@@ -32,7 +32,6 @@ class PPOAgent:
         # 为了严格复现 Table I: Critic lr=1e-3, Actor lr=2e-4
         # 由于是共享参数网络，通常共享部分使用较小学习率(Actor LR)，Head部分分开。
         # 这里为保持代码简洁，暂时恢复为统一优化器，但在 update 中计算 Loss 时会体现差异。
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=cfg.LR_ACTOR)
 
         # 旧策略网络
         self.policy_old = TransformerActorCritic().to(self.device)
