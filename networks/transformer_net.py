@@ -43,15 +43,20 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x):
         # x shape: (Batch, Seq_Len, State_Dim)
-        x = self.embedding(x)
 
-        # [新增] 加上位置编码
-        # 广播机制会自动处理 Batch 维度
-        x = x + self.pos_embedding[:, :x.size(1), :]
+        # 1. 生成 Padding Mask
+        # 假设全零向量是 padding，我们检查最后一个维度是否全为0
+        # mask shape: (Batch, Seq_Len), True 表示需要被忽略 (padding)
+        # 注意：PyTorch Transformer 的 mask 定义可能是 True 为忽略，取决于版本，通常 src_key_padding_mask 中 True 为忽略
+        mask = (x.abs().sum(dim=-1) == 0)
 
-        # x shape: (Batch, Seq_Len, Embed_Dim)
-        x = self.transformer(x)
-        return x
+        x_emb = self.embedding(x)
+        x_emb = x_emb + self.pos_embedding[:, :x.size(1), :]
+
+        # 2. 传入 mask
+        # 注意：src_key_padding_mask shape 应为 (Batch, Seq_Len)
+        out = self.transformer(x_emb, src_key_padding_mask=mask)
+        return out
 
 
 class TransformerActorCritic(nn.Module):
