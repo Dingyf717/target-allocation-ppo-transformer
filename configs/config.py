@@ -40,6 +40,7 @@ class Config:
     NUM_TARGETS = 10
     NUM_NFZ = 2
     NUM_INTERCEPTORS = 2
+    INTERCEPT_RAD = 3.0
 
     # 成本与权重
     COST_WEIGHT_OMEGA = 0.5
