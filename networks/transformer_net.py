@@ -26,6 +26,8 @@ class TransformerBlock(nn.Module):
             nn.ReLU()
         )
 
+        self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM))
+
         # 2. Transformer Encoder
         # Table I: Heads=8, Channels=128
         encoder_layer = nn.TransformerEncoderLayer(
@@ -40,6 +42,11 @@ class TransformerBlock(nn.Module):
     def forward(self, x):
         # x shape: (Batch, Seq_Len, State_Dim)
         x = self.embedding(x)
+
+        # [新增] 加上位置编码
+        # 广播机制会自动处理 Batch 维度
+        x = x + self.pos_embedding[:, :x.size(1), :]
+
         # x shape: (Batch, Seq_Len, Embed_Dim)
         x = self.transformer(x)
         return x
