@@ -203,24 +203,27 @@ class UAVEnv(gym.Env):
         # 需要遍历所有已经分配给该目标的 UAV
 
         not_hit_prob = 1.0
+        not_hit_prob_pure = 1.0  # 【新增】不含环境干扰的未命中率
+
         for uid in curr_target.locked_by_uavs:
             u_obj = next((u for u in self.uavs if u.id == uid), None)
             if u_obj:
-                # 调用 mechanics 计算优势度 (包含毁伤和突防)
-                # 注意：这里只关心 p_final
-                p_adv, _ = calc_advantage(u_obj, curr_target, self.nfz_list, self.interceptors)
+                # 获取 p_final 和 p_damage_only
+                p_adv, p_pure = calc_advantage(u_obj, curr_target, self.nfz_list, self.interceptors)
                 not_hit_prob *= (1.0 - p_adv)
+                not_hit_prob_pure *= (1.0 - p_pure)  # 【新增】
 
         prev_joint_p = 1.0 - not_hit_prob
+        prev_joint_p_pure = 1.0 - not_hit_prob_pure  # 【新增】
         prev_revenue = prev_joint_p * curr_target.value
 
         # --- 3. 生成状态向量 ---
-        # 调用 mechanics.py 中修正后的 get_state_vector
         current_feat = get_state_vector(
             curr_uav, curr_target, self.nfz_list, self.interceptors,
             global_stats=global_stats,
             prev_joint_p=prev_joint_p,
-            prev_revenue=prev_revenue
+            prev_revenue=prev_revenue,
+            prev_joint_p_damage_only=prev_joint_p_pure  # 【传入新增参数】
         )
 
         self.state_buffer.append(current_feat)

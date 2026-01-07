@@ -12,7 +12,7 @@ class Config:
     TARGET_GEN_X_RANGE = (160, 180)
 
     # 实体数量
-    NUM_UAVS = 20
+    NUM_UAVS = 30
     NUM_TARGETS = 10
     NUM_NFZ = 2
     NUM_INTERCEPTORS = 2

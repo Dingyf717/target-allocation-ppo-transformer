@@ -113,7 +113,7 @@ def calc_penetration_prob(uav_pos, target_pos, nfz_list, interceptor_list):
 
 # --- 【核心修正】 生成符合 Eq. (15) 的状态向量 ---
 def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
-                     prev_joint_p=0.0, prev_revenue=0.0):
+                     prev_joint_p=0.0, prev_revenue=0.0, prev_joint_p_damage_only=0.0):
     """
     严格按照论文 Eq. (15) 构建 14 维状态向量
     参数:
@@ -121,28 +121,29 @@ def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
       prev_revenue: \bar{G}_m (分配前的收益)
     """
 
-    # 1. 计算当前 UAV-Target 的优势度
+    # 1. 计算当前 UAV 的 p (实际) 和 p_pure (理想)
     p_km, p_km_damage_only = calc_advantage(uav, target, nfz_list, interceptor_list)
 
-    # 2. 计算假设分配后的联合优势度 \hat{p}_m (Eq. 11)
-    # p_new = 1 - (1 - p_old) * (1 - p_km)
+    # 2. 计算分配后的状态
+    # 实际联合概率: 1 - (1 - P_old) * (1 - p_km)
     hat_p_m = 1.0 - (1.0 - prev_joint_p) * (1.0 - p_km)
 
-    # 3. 计算假设分配后的收益 \hat{G}_m
-    # G = p * Value
+    # 理想联合概率: 1 - (1 - P_old_pure) * (1 - p_km_pure)
+    hat_p_m_pure = 1.0 - (1.0 - prev_joint_p_damage_only) * (1.0 - p_km_damage_only)
+
     hat_G_m = hat_p_m * target.value
 
-    # 4. 计算 Delta 指标 (战场环境导致的衰减)
-    # Delta p_{k,m} = p_{damage_only} - p_{final}
+    # 3. 计算 Delta 指标 (Degradation / 衰减量)
+    # 论文含义：环境因素导致我们损失了多少概率/价值
+
+    # Delta p_{k,m}: 单机衰减 (已正确实现)
     delta_p_km = p_km_damage_only - p_km
 
-    # Delta p_m (联合概率的衰减增量?)
-    # 论文语焉不详，通常指 (理想联合 - 实际联合) 的增量，或者分配前后的 p_m 增量
-    # 这里取分配带来的增益: \hat{p}_m - \bar{p}_m
-    delta_p_m = hat_p_m - prev_joint_p
+    # Delta p_m: 联合衰减 (【修正】理想 - 实际)
+    delta_p_m = hat_p_m_pure - hat_p_m
 
-    # Delta G_m
-    delta_G_m = hat_G_m - prev_revenue
+    # Delta G_m: 价值衰减 (【修正】理想收益 - 实际收益)
+    delta_G_m = (hat_p_m_pure * target.value) - hat_G_m
 
     # 提取全局统计
     if global_stats is None:

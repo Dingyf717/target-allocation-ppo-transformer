@@ -13,11 +13,15 @@ class PPOAgent:
 
         # 初始化网络
         self.policy = TransformerActorCritic().to(self.device)
+        # 【修正】根据新的解耦网络结构，正确分组参数并设置对应学习率
         self.optimizer = optim.Adam([
-            {'params': self.policy.actor_head.parameters(), 'lr': cfg.LR_ACTOR},  # 细分学习率通常更好，这里简化保持一致或按需调整
+            # Actor 部分 (LR = 2e-4)
+            {'params': self.policy.actor_head.parameters(), 'lr': cfg.LR_ACTOR},
+            {'params': self.policy.actor_net.parameters(), 'lr': cfg.LR_ACTOR},  # 包含 Actor 的 Embedding 和 Transformer
+
+            # Critic 部分 (LR = 1e-3)
             {'params': self.policy.critic_head.parameters(), 'lr': cfg.LR_CRITIC},
-            {'params': self.policy.embedding.parameters(), 'lr': cfg.LR_ACTOR},  # 共享层通常跟随 Actor 或更小
-            {'params': self.policy.transformer.parameters(), 'lr': cfg.LR_ACTOR}
+            {'params': self.policy.critic_net.parameters(), 'lr': cfg.LR_CRITIC},  # 包含 Critic 的 Embedding 和 Transformer
         ])
 
         # 简单起见，如果不想细分参数组，使用原版也可以，但需注意 Table I 区分了 Actor/Critic 学习率
