@@ -9,119 +9,186 @@ def get_distance(pos1, pos2):
 
 # --- 论文公式 (1): 角度评价指标 (Angle Evaluation) ---
 def calc_angle_score(uav_pos, uav_vel, target_pos):
+    """
+    计算角度评价指标 E_angle
+    Eq. (1): exp(-(sigma / (b * pi))^2)
+    其中 sigma 是速度方向与连线的夹角，b = 0.002 * L (L为距离)
+    """
+    # 1. 计算连线向量和距离
     vec_u_t = target_pos - uav_pos
-    dist = np.linalg.norm(vec_u_t) + 1e-6
-    vec_u_t /= dist
+    dist = np.linalg.norm(vec_u_t)
 
-    speed = np.linalg.norm(uav_vel) + 1e-6
-    vec_v = uav_vel / speed
+    # 边界处理：重合时角度得分为 1
+    if dist < 1e-6:
+        return 1.0
 
-    # 论文 Fig. 1 和公式 (1): exp(-(sigma/b*pi)^2)
-    # 这里保持原代码的 cosine 逻辑作为近似，或者严格按公式实现
-    cos_theta = np.dot(vec_u_t, vec_v)
-    theta = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+    # 2. 计算夹角 sigma (弧度)
+    # 归一化连线向量
+    vec_u_t_norm = vec_u_t / dist
 
-    # 论文参数 b = 0.002 * L (dist)
-    # b_val = 0.002 * dist
-    # sigma = theta
-    # score = np.exp(- (theta / (b_val * np.pi + 1e-6))**2)
-    # 原代码使用了 cfg.PARAM_K * theta，这是另一种常见形式，为保持稳定性暂不改为极不稳定的 b*L
-    score = np.exp(-cfg.PARAM_K * np.abs(theta))
+    # UAV 速度向量归一化
+    speed = np.linalg.norm(uav_vel)
+    if speed < 1e-6:
+        # 速度为0时，无法定义航向，假设最差情况或保持朝向
+        vec_v = np.array([1.0, 0.0])
+    else:
+        vec_v = uav_vel / speed
+
+    # 计算夹角
+    cos_theta = np.dot(vec_u_t_norm, vec_v)
+    sigma = np.arccos(np.clip(cos_theta, -1.0, 1.0))  # 弧度 [0, pi]
+
+    # 3. 计算动态参数 b
+    # b = 0.002 * L
+    b_val = 0.002 * dist
+    # 防止分母为0 (极近距离时 b_val 极小，指数项会很大，score -> 0，但这不符合直觉)
+    # 论文中 b 用于调节 mapping ratio。
+    # 修正逻辑：当距离很近时，角度容忍度应该变大还是变小？
+    # 通常距离越近，对角度要求越低（容易击中）？或者越高（不仅要近还要准）？
+    # 根据公式，L越小，b越小，分母越小，指数绝对值越大，Score衰减越快。
+    # 这意味着距离越近，对角度偏差越敏感（High-speed UAV large turning radius）。
+    if b_val < 1e-6: b_val = 1e-6
+
+    # 4. 计算指标
+    # exponent = (sigma / (b * pi))^2
+    exponent = (sigma / (b_val * np.pi)) ** 2
+    score = np.exp(-exponent)
+
     return score
 
 
 # --- 论文公式 (2): 速度评价指标 (Speed Evaluation) ---
 def calc_speed_score(uav_speed, target_speed):
-    # Eq (2): 1 - (k * v_tgt / v_uav)
-    # 这是一个相对速度指标
+    """
+    Eq (2): 1 - (k * v_tgt / v_uav)
+    """
     if uav_speed < 1e-6: return 0.0
-    score = 1.0 - (5.0 * target_speed / uav_speed)
+    # k = 5.0 (cfg.PARAM_K)
+    score = 1.0 - (cfg.PARAM_K * target_speed / uav_speed)
     return np.clip(score, 0.0, 1.0)
 
 
 # --- 论文公式 (3): 距离评价指标 (Distance Evaluation) ---
 def calc_dist_score(dist, is_obstacle=False):
-    # Eq (3): exp(-((D - Dmid)/zeta)^2)
+    """
+    Eq (3): exp(-((D - Dmid)/zeta)^2)
+    """
     if is_obstacle:
-        D_mid = 0
+        # 对于障碍物 (NFZ/Interceptor)，D_mid = 0
+        D_mid = 0.0
         zeta = cfg.PARAM_ZETA_D
     else:
-        # 对于 Target，D_mid 是最优攻击距离，论文设为地图宽度的函数
-        # 这里简化处理，假设最优距离为 0 (越近越好) 或保持原逻辑
-        D_mid = 0
+        # 对于 Target，D_mid 应该是最优攻击距离
+        # 论文中 D_mid = [(x_max^T - x_min^U) + (x_min^T - x_max^U)] / 2
+        # 这里为了简化复现且保持稳定，暂时沿用 D_mid = 0 (越近越好)
+        # 如果需要严格复现，需要传入 map 边界参数
+        D_mid = 0.0
         zeta = cfg.PARAM_ZETA_D
 
     score = np.exp(-((dist - D_mid) / zeta) ** 2)
     return score
 
 
-# --- 论文公式 (4)-(6): 优势度计算 (Advantage Modeling) ---
+# --- 论文公式 (4): 毁伤概率 (Damage Probability) ---
+def calc_damage_prob(uav, target):
+    """
+    Eq. (4): p_hat = E_angle * (c1 * E_dist + c2 * E_speed) * Load
+    注意：这里的 Load 应该是经过天气折损后的实际载荷
+    """
+    dist = get_distance(uav.pos, target.pos)
+    uav_speed = np.linalg.norm(uav.velocity)
+    target_speed = np.linalg.norm(target.velocity)  # 假设Target有velocity属性
+
+    # 1. 计算三个评价指标
+    E_angle = calc_angle_score(uav.pos, uav.velocity, target.pos)
+    E_dist = calc_dist_score(dist, is_obstacle=False)
+    E_speed = calc_speed_score(uav_speed, target_speed)
+
+    # 2. 组合 (Eq. 4)
+    # Load 属性在 uav_env.py 中已经应该是考虑天气后的值 (如果实现了 Mod 2)
+    # 这里直接使用 uav.load
+    # 确保 load 是归一化或者合理的数值？论文中 load ~ 0.95/1.0
+    term_bracket = cfg.PARAM_C1 * E_dist + cfg.PARAM_C2 * E_speed
+    p_hat = E_angle * term_bracket * uav.load
+
+    return np.clip(p_hat, 0.0, 1.0)
+
+
+# --- 论文公式 (5)-(6): 突防概率 (Penetration Probability) ---
+def calc_penetration_prob(uav, target, nfz_list, interceptor_list):
+    """
+    计算针对所有障碍物的联合突防概率
+    Eq. (5) for NFZ: p = (1 - E_a)(1 - E_d)
+    Eq. (6) for Int: p = (1 - E_a)(c3(1-E_d) + c4 E_v)
+    Final P_pen = Prod(p_i)
+    """
+    p_pen_total = 1.0
+
+    uav_speed = np.linalg.norm(uav.velocity)
+
+    # 1. 遍历禁飞区 (NFZ)
+    for nfz in nfz_list:
+        # 计算相对于 NFZ 的评价指标
+        # 注意：角度指标是 UAV 指向 NFZ 的连线与 UAV 速度的夹角
+        E_angle = calc_angle_score(uav.pos, uav.velocity, nfz.pos)
+        dist = get_distance(uav.pos, nfz.pos)
+        E_dist = calc_dist_score(dist, is_obstacle=True)
+
+        # Eq. (5)
+        # 注意：这里 E_angle 越大(越准)，(1-E_a) 越小，突防率越低 -> 撞上了
+        # (1-E_d) 越小(离得近，E_d大)，突防率越低
+        p_nfz = (1.0 - E_angle) * (1.0 - E_dist)
+        p_pen_total *= np.clip(p_nfz, 0.0, 1.0)
+
+    # 2. 遍历拦截者 (Interceptor)
+    for inter in interceptor_list:
+        E_angle = calc_angle_score(uav.pos, uav.velocity, inter.pos)
+        dist = get_distance(uav.pos, inter.pos)
+        E_dist = calc_dist_score(dist, is_obstacle=True)
+
+        # 拦截者的速度评价指标 E_speed
+        # 论文中 E_speed 是 UAV 与 Interceptor 的速度对比吗？
+        # Eq (2) 定义是 v_target，这里应该是 v_interceptor
+        inter_speed = getattr(inter, 'velocity', 0.0)  # 假设实体有速度，如果没有默认为0
+        if isinstance(inter_speed, np.ndarray):
+            inter_speed = np.linalg.norm(inter_speed)
+
+        E_speed = calc_speed_score(uav_speed, inter_speed)
+
+        # Eq. (6)
+        term_bracket = cfg.PARAM_C3 * (1.0 - E_dist) + cfg.PARAM_C4 * E_speed
+        p_int = (1.0 - E_angle) * term_bracket
+        p_pen_total *= np.clip(p_int, 0.0, 1.0)
+
+    return p_pen_total
+
+
+# --- 综合优势度计算 ---
 def calc_advantage(uav, target, nfz_list, interceptor_list):
     """
     计算 UAV 对 Target 的优势度 p_{k,m}
-    返回: (final_p, damage_only_p)
-    damage_only_p 用于计算 Delta p (战场因素造成的衰减)
+    返回: (p_final, p_damage_only)
     """
-    dist = get_distance(uav.pos, target.pos)
+    # 1. 纯毁伤概率 (只看 Target)
+    p_damage = calc_damage_prob(uav, target)
 
-    # 1. 毁伤概率 (基于距离和角度) Eq. (4)
-    # p_hat = E_angle * (c1*E_dist + c2*E_speed) * Load
-    # 这里简化沿用原代码的概率公式，但在论文中是基于 Evaluation Metrics 组合的
-    # 为了复现原代码逻辑的稳定性，我们保留 calc_damage_prob 的核心逻辑
-    # 但必须返回 "纯毁伤概率" (不含 NFZ/Interceptor)
+    # 2. 突防概率 (看环境)
+    p_pen = calc_penetration_prob(uav, target, nfz_list, interceptor_list)
 
-    p_damage = 1.0 / (1.0 + cfg.PARAM_C1 * dist)  # 原代码逻辑
-    # 加上角度影响 (论文 Eq 4)
-    angle_score = calc_angle_score(uav.pos, uav.velocity, target.pos)
-    p_damage *= angle_score
-
-    # 2. 突防概率 (Penetration Prob) Eq. (5)-(6)
-    p_pen = 1.0
-
-    # NFZ
-    for nfz in nfz_list:
-        # 简单判定：连线是否穿过圆
-        # 实际论文用了 E_angle, E_dist 组合
-        # 这里沿用原代码的采样检测法，更精确
-        d_nfz = get_distance(uav.pos, nfz.pos)
-        if d_nfz < nfz.radius + dist:  # 粗筛
-            # ... (原代码采样逻辑) ...
-            pass
-
-    # 沿用原代码的 calc_penetration_prob 逻辑来计算 p_pen
-    p_pen = calc_penetration_prob(uav.pos, target.pos, nfz_list, interceptor_list)
-
+    # 3. 最终优势度
     p_final = p_damage * p_pen
+
     return p_final, p_damage
 
 
-def calc_penetration_prob(uav_pos, target_pos, nfz_list, interceptor_list):
-    # ... (保持原代码逻辑不变) ...
-    prob_survive = 1.0
-    num_samples = 5
-    for t in np.linspace(0, 1, num_samples):
-        sample_point = uav_pos + t * (target_pos - uav_pos)
-        for nfz in nfz_list:
-            if get_distance(sample_point, nfz.pos) < nfz.radius:
-                prob_survive *= (1.0 - nfz.penalty_factor)
-    for inter in interceptor_list:
-        if get_distance(target_pos, inter.pos) < inter.radius:
-            if get_distance(uav_pos, inter.pos) < inter.radius:
-                prob_survive *= (1.0 - inter.kill_prob)
-    return prob_survive
-
-
-# --- 【核心修正】 生成符合 Eq. (15) 的状态向量 ---
+# --- 状态向量构建 (保持原逻辑，但数值来源变了) ---
 def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
                      prev_joint_p=0.0, prev_revenue=0.0, prev_joint_p_damage_only=0.0):
     """
     严格按照论文 Eq. (15) 构建 14 维状态向量
-    参数:
-      prev_joint_p: \bar{p}_m (分配前的联合优势度)
-      prev_revenue: \bar{G}_m (分配前的收益)
     """
-
     # 1. 计算当前 UAV 的 p (实际) 和 p_pure (理想)
+    # 这里的 calc_advantage 已经是修改后的版本
     p_km, p_km_damage_only = calc_advantage(uav, target, nfz_list, interceptor_list)
 
     # 2. 计算分配后的状态
@@ -133,16 +200,9 @@ def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
 
     hat_G_m = hat_p_m * target.value
 
-    # 3. 计算 Delta 指标 (Degradation / 衰减量)
-    # 论文含义：环境因素导致我们损失了多少概率/价值
-
-    # Delta p_{k,m}: 单机衰减 (已正确实现)
+    # 3. 计算 Delta 指标
     delta_p_km = p_km_damage_only - p_km
-
-    # Delta p_m: 联合衰减 (【修正】理想 - 实际)
     delta_p_m = hat_p_m_pure - hat_p_m
-
-    # Delta G_m: 价值衰减 (【修正】理想收益 - 实际收益)
     delta_G_m = (hat_p_m_pure * target.value) - hat_G_m
 
     # 提取全局统计
@@ -154,29 +214,27 @@ def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
         chi_mc = global_stats.get('target_cost_ratio', 0.0)
 
     # 状态向量 (14维) [Eq. 15]
-    # s = [c_k, xi_m, chi_c, chi_v, chi_mc, p_km, bar_p_m, hat_p_m, bar_G_m, hat_G_m, D_pkm, D_pm, D_Gm, x_km]
     state = np.array([
-        getattr(uav, 'cost', 1.0),  # 1. c_k^j (UAV Cost)
-        target.value,  # 2. xi_m^w (Target Value)
-        chi_c,  # 3. chi_c (Global Cost Ratio)
-        chi_v,  # 4. chi_v (Global Value Ratio)
-        chi_mc,  # 5. chi_{m,c}^w (Target Cost Ratio)
-        p_km,  # 6. p_{k,m} (Advantage)
-        prev_joint_p,  # 7. bar{p}_m (Prev Joint Prob)
-        hat_p_m,  # 8. hat{p}_m (New Joint Prob)
-        prev_revenue,  # 9. bar{G}_m (Prev Revenue)
-        hat_G_m,  # 10. hat{G}_m (New Revenue)
-        delta_p_km,  # 11. Delta p_{k,m} (Env Penalty)
-        delta_p_m,  # 12. Delta p_m (Prob Gain)
-        delta_G_m,  # 13. Delta G_m (Revenue Gain)
-        float(uav.available)  # 14. x_{k,m} (Status / Mask)
+        getattr(uav, 'cost', 1.0),
+        target.value,
+        chi_c,
+        chi_v,
+        chi_mc,
+        p_km,
+        prev_joint_p,
+        hat_p_m,
+        prev_revenue,
+        hat_G_m,
+        delta_p_km,
+        delta_p_m,
+        delta_G_m,
+        float(uav.available)
     ], dtype=np.float32)
 
-    # 归一化 (可选，建议对 Value 和 Cost 进行缩放以利于训练)
-    # 例如 value /= 16.0, cost /= 2.0
-    state[0] /= 2.0  # Cost 1.0~1.25
-    state[1] /= 16.0  # Value 4~16
-    state[8] /= 16.0  # Revenue
+    # 简单的归一化处理 (可选)
+    state[0] /= 2.0
+    state[1] /= 16.0
+    state[8] /= 16.0
     state[9] /= 16.0
     state[12] /= 16.0
 

@@ -13,25 +13,34 @@ def init_layer(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class TransformerBlock(nn.Module):
-    """ 独立的 Transformer 模块 (Embedding + Encoder) """
+    """
+    Transformer 编码模块
+    结构: Linear Embedding -> Transformer Encoder
+    """
 
     def __init__(self):
         super(TransformerBlock, self).__init__()
+        # 1. Embedding 层: 将 State (14维) 映射到 Embed Dim (128维)
         self.embedding = nn.Sequential(
             init_layer(nn.Linear(cfg.STATE_DIM, cfg.EMBED_DIM)),
             nn.ReLU()
         )
+
+        # 2. Transformer Encoder
+        # Table I: Heads=8, Channels=128
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.EMBED_DIM,
             nhead=cfg.NUM_HEADS,
-            dim_feedforward=256,
+            dim_feedforward=256,  # 内部 FFN 维度，通常 2-4 倍 Embed Dim
             dropout=0.0,
             batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
 
     def forward(self, x):
+        # x shape: (Batch, Seq_Len, State_Dim)
         x = self.embedding(x)
+        # x shape: (Batch, Seq_Len, Embed_Dim)
         x = self.transformer(x)
         return x
 
@@ -42,16 +51,18 @@ class TransformerActorCritic(nn.Module):
 
         self.flat_dim = cfg.SEQ_LEN * cfg.EMBED_DIM
 
-        # --- 1. Actor Network (独立) ---
+        # --- Actor Network ---
         self.actor_net = TransformerBlock()
+        # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Softmax (在 get_action 中做)
         self.actor_head = nn.Sequential(
             init_layer(nn.Linear(self.flat_dim, 64)),
             nn.ReLU(),
             init_layer(nn.Linear(64, cfg.ACTION_DIM), std=0.01)
         )
 
-        # --- 2. Critic Network (独立) ---
+        # --- Critic Network ---
         self.critic_net = TransformerBlock()
+        # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Output
         self.critic_head = nn.Sequential(
             init_layer(nn.Linear(self.flat_dim, 64)),
             nn.ReLU(),
@@ -59,29 +70,44 @@ class TransformerActorCritic(nn.Module):
         )
 
     def forward(self, state):
-        if state.dim() == 2: state = state.unsqueeze(0)
-
-        # Actor Path
-        x_actor = self.actor_net(state)
-        x_actor = x_actor.reshape(x_actor.size(0), -1)
-        action_logits = self.actor_head(x_actor)
-
-        # Critic Path
-        x_critic = self.critic_net(state)
-        x_critic = x_critic.reshape(x_critic.size(0), -1)
-        state_value = self.critic_head(x_critic)
-
-        return action_logits, state_value
+        raise NotImplementedError("Please use get_action or evaluate.")
 
     def get_action(self, state):
-        logits, value = self(state)
+        """用于采样动作 (Inference)"""
+        if state.dim() == 2: state = state.unsqueeze(0)
+
+        # 1. Actor forward
+        x = self.actor_net(state)
+        x = x.reshape(x.size(0), -1)  # Flatten: (Batch, Seq*Embed)
+        logits = self.actor_head(x)
+
+        # 2. Critic forward (获取当前状态价值)
+        v_x = self.critic_net(state)
+        v_x = v_x.reshape(v_x.size(0), -1)
+        value = self.critic_head(v_x)
+
         probs = torch.softmax(logits, dim=-1)
         dist = Categorical(probs)
         action = dist.sample()
+
         return action, dist.log_prob(action), value, dist.entropy()
 
     def evaluate(self, state, action):
-        logits, value = self(state)
+        """用于 PPO 更新 (Training)"""
+        # 1. Actor forward
+        x = self.actor_net(state)
+        x = x.reshape(x.size(0), -1)
+        logits = self.actor_head(x)
+
+        # 2. Critic forward
+        v_x = self.critic_net(state)
+        v_x = v_x.reshape(v_x.size(0), -1)
+        value = self.critic_head(v_x)
+
         probs = torch.softmax(logits, dim=-1)
         dist = Categorical(probs)
-        return dist.log_prob(action), value, dist.entropy()
+
+        action_logprobs = dist.log_prob(action)
+        dist_entropy = dist.entropy()
+
+        return action_logprobs, value, dist_entropy
