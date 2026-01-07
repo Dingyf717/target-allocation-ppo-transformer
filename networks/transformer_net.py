@@ -26,7 +26,9 @@ class TransformerBlock(nn.Module):
             nn.ReLU()
         )
 
-        self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM))
+        # self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM))
+        # 建议使用更小的标准差，例如 0.02 (类似 BERT/GPT 的初始化)
+        self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM) * 0.02)
 
         # 2. Transformer Encoder
         # Table I: Heads=8, Channels=128

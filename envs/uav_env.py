@@ -281,51 +281,73 @@ class UAVEnv(gym.Env):
         curr_target = self.targets[self.target_idx]
         done = False
 
-        # 1. 记录动作前的 r(X)
+        # 1. 记录动作前的 r(X) (即论文中的 r(X))
         prev_r = self._calculate_paper_reward()
 
-        # 2. 执行动作
-        if action == 1:  # Assign
+        reward = 0.0
+
+        # 2. 执行动作逻辑
+        if action == 1:  # 尝试分配 (Assign)
+            # --- 预执行 (Tentative Execution) ---
             curr_uav.assigned_target_id = curr_target.id
             curr_uav.available = False
             curr_target.locked_by_uavs.append(curr_uav.id)
 
-            # 逻辑: 一旦分配，该 UAV 任务结束，处理下一架 UAV
-            self.uav_idx += 1
-            self.target_idx = 0
-        else:  # Skip
-            # 逻辑: 查看当前 UAV 的下一个 Target
+            # 计算潜在的新奖励 r(X')
+            new_r = self._calculate_paper_reward()
+
+            # --- 【Critical Fix: Eq. 21 条件判断】 ---
+            # 只有当新方案的评分非降 (r(X') >= r(X)) 时，才确认分配
+            if new_r >= prev_r:
+                # [Case A: 接受分配]
+                # 状态更新：X -> X' (已在预执行中完成)
+                # 即时奖励 R(s,a) = r(X') - r(X) [Eq. 17]
+                reward = new_r - prev_r
+
+                # 逻辑流转：该 UAV 已分配任务，跳出循环，处理下一架 UAV
+                self.uav_idx += 1
+                self.target_idx = 0
+            else:
+                # [Case B: 拒绝分配 (Rollback)]
+                # 状态保持：X 不变 (回滚预执行的操作)
+                curr_uav.assigned_target_id = -1
+                curr_uav.available = True
+                curr_target.locked_by_uavs.pop()  # 移除刚才添加的 UAV ID
+
+                # 即时奖励：由于状态未变，X' = X，故 r(X') - r(X) = 0
+                reward = 0.0
+
+                # 逻辑流转：虽然 Agent 选择了 Assign，但被规则拒绝。
+                # 按照序贯决策逻辑，这等同于被迫 "Skip"，继续检查当前 UAV 的下一个目标
+                self.target_idx += 1
+                if self.target_idx >= len(self.targets):
+                    # 如果遍历完所有目标都未分配/被拒绝，轮到下一架 UAV
+                    self.uav_idx += 1
+                    self.target_idx = 0
+
+        else:  # action == 0 (Skip)
+            # 保持状态不变，检查下一个目标
+            reward = 0.0
             self.target_idx += 1
 
-            # 如果当前 UAV 遍历完所有 Target 都未分配
+            # 边界检查：当前 UAV 遍历完所有 Target
             if self.target_idx >= len(self.targets):
-                # 轮到下一架 UAV
                 self.uav_idx += 1
                 self.target_idx = 0
 
-        # 3. 记录动作后的 r(X')
-        new_r = self._calculate_paper_reward()
-
-        # 4. 计算即时奖励 R(s, a) (Eq. 17)
-        # 如果 action=1, R = r(X') - r(X)
-        if action == 1:
-            reward = new_r - prev_r
-        else:
-            reward = 0.0
-
-        # 5. 检查结束条件
+        # 3. 检查 Episode 是否结束
         if self.uav_idx >= len(self.uavs):
             done = True
 
-        # --- 【Modification 3 (Reward)】: 引入 Goal Reward (Eq. 20) ---
-        # 如果 Episode 结束，Agent 获得最终局面的评分 R_goal = r(X')
-        # 这对于 PPO 正确估计 Value Function 至关重要
+        # 4. 【Reward Correction】: 引入 Goal Reward (Eq. 20)
+        # 论文 Eq. 20 显示总目标是最大化累积奖励 + 最终目标奖励
+        # 但在 PPO 实现中，通常将最终局面的评分加在最后一步
         if done:
-            final_goal_reward = new_r
-            reward += final_goal_reward
+            final_r = self._calculate_paper_reward()
+            reward += final_r  # R_goal = r(X_final)
 
-        # 6. 获取新状态
-        # 注意: 如果 done=True, _get_obs 会返回零向量
+        # 5. 获取新状态
+        # 如果 done=True，_get_obs 通常返回全零或最后状态，根据你的实现逻辑
         obs = self._get_obs()
 
         return obs, reward, done, {}
