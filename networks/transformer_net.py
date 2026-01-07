@@ -5,25 +5,22 @@ import numpy as np
 from torch.distributions import Categorical
 from configs.config import cfg
 
+
 def init_layer(layer, std=np.sqrt(2), bias_const=0.0):
-    """ PPO 专用的正交初始化 """
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-class TransformerActorCritic(nn.Module):
-    def __init__(self):
-        super(TransformerActorCritic, self).__init__()
 
-        # 1. 特征嵌入层 (Feature Embedding)
-        # 输入: (Batch, Seq_Len, 14) -> 输出: (Batch, Seq_Len, 128)
+class TransformerBlock(nn.Module):
+    """ 独立的 Transformer 模块 (Embedding + Encoder) """
+
+    def __init__(self):
+        super(TransformerBlock, self).__init__()
         self.embedding = nn.Sequential(
             init_layer(nn.Linear(cfg.STATE_DIM, cfg.EMBED_DIM)),
-            nn.ReLU() # 【修正】Tanh -> ReLU (对应论文 Fig. 2)
+            nn.ReLU()
         )
-
-        # 2. Transformer Encoder (核心特征提取)
-        # batch_first=True 意味着输入/输出格式为 (Batch, Seq_Len, Embed_Dim)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.EMBED_DIM,
             nhead=cfg.NUM_HEADS,
@@ -31,69 +28,60 @@ class TransformerActorCritic(nn.Module):
             dropout=0.0,
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=cfg.NUM_LAYERS
-        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
 
-        # 计算展平后的特征维度
-        # 维度 = SEQ_LEN * EMBED_DIM
+    def forward(self, x):
+        x = self.embedding(x)
+        x = self.transformer(x)
+        return x
+
+
+class TransformerActorCritic(nn.Module):
+    def __init__(self):
+        super(TransformerActorCritic, self).__init__()
+
         self.flat_dim = cfg.SEQ_LEN * cfg.EMBED_DIM
 
-        # 3. Actor Head (策略头)
+        # --- 1. Actor Network (独立) ---
+        self.actor_net = TransformerBlock()
         self.actor_head = nn.Sequential(
             init_layer(nn.Linear(self.flat_dim, 64)),
-            nn.ReLU(), # 【修正】Tanh -> ReLU
+            nn.ReLU(),
             init_layer(nn.Linear(64, cfg.ACTION_DIM), std=0.01)
         )
 
-        # 4. Critic Head (价值头)
+        # --- 2. Critic Network (独立) ---
+        self.critic_net = TransformerBlock()
         self.critic_head = nn.Sequential(
             init_layer(nn.Linear(self.flat_dim, 64)),
-            nn.ReLU(), # 【修正】Tanh -> ReLU
+            nn.ReLU(),
             init_layer(nn.Linear(64, 1), std=1.0)
         )
 
     def forward(self, state):
-        # state shape: (Batch, Seq_Len, State_Dim)
+        if state.dim() == 2: state = state.unsqueeze(0)
 
-        # 容错处理：如果输入没有 Batch 维度，则增加 Batch 维度
-        if state.dim() == 2:
-            state = state.unsqueeze(0)
+        # Actor Path
+        x_actor = self.actor_net(state)
+        x_actor = x_actor.reshape(x_actor.size(0), -1)
+        action_logits = self.actor_head(x_actor)
 
-        # 1. Embedding
-        x = self.embedding(state)
-
-        # 2. Transformer
-        x = self.transformer(x)
-
-        # 3. Flatten (展平)
-        # 将 (Batch, Seq, Feat) 展平为 (Batch, Seq * Feat)
-        x_flat = x.reshape(x.size(0), -1)
-
-        action_logits = self.actor_head(x_flat)
-        state_value = self.critic_head(x_flat)
+        # Critic Path
+        x_critic = self.critic_net(state)
+        x_critic = x_critic.reshape(x_critic.size(0), -1)
+        state_value = self.critic_head(x_critic)
 
         return action_logits, state_value
 
     def get_action(self, state):
-        """ 采样动作 (用于 rollout) """
         logits, value = self(state)
         probs = torch.softmax(logits, dim=-1)
         dist = Categorical(probs)
-
         action = dist.sample()
-        log_prob = dist.log_prob(action)
-
-        return action, log_prob, value, dist.entropy()
+        return action, dist.log_prob(action), value, dist.entropy()
 
     def evaluate(self, state, action):
-        """ 评估动作 (用于 update) """
         logits, value = self(state)
         probs = torch.softmax(logits, dim=-1)
         dist = Categorical(probs)
-
-        action_logprobs = dist.log_prob(action)
-        dist_entropy = dist.entropy()
-
-        return action_logprobs, value, dist_entropy
+        return dist.log_prob(action), value, dist.entropy()
