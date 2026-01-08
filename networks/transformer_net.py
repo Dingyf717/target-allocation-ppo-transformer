@@ -26,8 +26,7 @@ class TransformerBlock(nn.Module):
             nn.ReLU()
         )
 
-        # self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM))
-        # 建议使用更小的标准差，例如 0.02 (类似 BERT/GPT 的初始化)
+        # 位置编码: 建议使用较小的初始化方差
         self.pos_embedding = nn.Parameter(torch.randn(1, cfg.SEQ_LEN, cfg.EMBED_DIM) * 0.02)
 
         # 2. Transformer Encoder
@@ -35,7 +34,7 @@ class TransformerBlock(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.EMBED_DIM,
             nhead=cfg.NUM_HEADS,
-            dim_feedforward=256,  # 内部 FFN 维度，通常 2-4 倍 Embed Dim
+            dim_feedforward=256,  # 内部 FFN 维度
             dropout=0.0,
             batch_first=True
         )
@@ -44,17 +43,17 @@ class TransformerBlock(nn.Module):
     def forward(self, x):
         # x shape: (Batch, Seq_Len, State_Dim)
 
-        # 1. 生成 Padding Mask
-        # 假设全零向量是 padding，我们检查最后一个维度是否全为0
-        # mask shape: (Batch, Seq_Len), True 表示需要被忽略 (padding)
-        # 注意：PyTorch Transformer 的 mask 定义可能是 True 为忽略，取决于版本，通常 src_key_padding_mask 中 True 为忽略
+        # 生成 Padding Mask (防止 Attention 关注到全0的填充部分)
+        # mask shape: (Batch, Seq_Len), True 表示需要被忽略
         mask = (x.abs().sum(dim=-1) == 0)
 
+        # Embedding + Positional Encoding
         x_emb = self.embedding(x)
+        # 截取对应长度的位置编码 (兼容可能的变长输入，虽然 Config 固定为 5)
         x_emb = x_emb + self.pos_embedding[:, :x.size(1), :]
 
-        # 2. 传入 mask
-        # 注意：src_key_padding_mask shape 应为 (Batch, Seq_Len)
+        # Transformer Forward
+        # 注意: src_key_padding_mask 在 PyTorch 中 True 表示忽略
         out = self.transformer(x_emb, src_key_padding_mask=mask)
         return out
 
@@ -63,13 +62,15 @@ class TransformerActorCritic(nn.Module):
     def __init__(self):
         super(TransformerActorCritic, self).__init__()
 
-        self.flat_dim = cfg.SEQ_LEN * cfg.EMBED_DIM
+        # --- 修改点 1: 输入维度不再依赖序列长度，只依赖 Embedding 维度 ---
+        # 之前的代码是: self.flat_dim = cfg.SEQ_LEN * cfg.EMBED_DIM
+        self.hidden_dim = cfg.EMBED_DIM
 
         # --- Actor Network ---
         self.actor_net = TransformerBlock()
-        # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Softmax (在 get_action 中做)
+        # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Softmax
         self.actor_head = nn.Sequential(
-            init_layer(nn.Linear(self.flat_dim, 64)),
+            init_layer(nn.Linear(self.hidden_dim, 64)),  # 输入改为 128 (EMBED_DIM)
             nn.ReLU(),
             init_layer(nn.Linear(64, cfg.ACTION_DIM), std=0.01)
         )
@@ -78,7 +79,7 @@ class TransformerActorCritic(nn.Module):
         self.critic_net = TransformerBlock()
         # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Output
         self.critic_head = nn.Sequential(
-            init_layer(nn.Linear(self.flat_dim, 64)),
+            init_layer(nn.Linear(self.hidden_dim, 64)),  # 输入改为 128 (EMBED_DIM)
             nn.ReLU(),
             init_layer(nn.Linear(64, 1), std=1.0)
         )
@@ -92,12 +93,20 @@ class TransformerActorCritic(nn.Module):
 
         # 1. Actor forward
         x = self.actor_net(state)
-        x = x.reshape(x.size(0), -1)  # Flatten: (Batch, Seq*Embed)
+
+        # --- 修改点 2: 提取最后一个时间步的特征 ---
+        # x shape: (Batch, Seq_Len, Embed_Dim) -> 取切片 -> (Batch, Embed_Dim)
+        # 这一步提取了包含前面所有历史信息的当前时刻上下文特征
+        x = x[:, -1, :]
+
         logits = self.actor_head(x)
 
         # 2. Critic forward (获取当前状态价值)
         v_x = self.critic_net(state)
-        v_x = v_x.reshape(v_x.size(0), -1)
+
+        # 同样提取最后一个时间步
+        v_x = v_x[:, -1, :]
+
         value = self.critic_head(v_x)
 
         probs = torch.softmax(logits, dim=-1)
@@ -110,12 +119,14 @@ class TransformerActorCritic(nn.Module):
         """用于 PPO 更新 (Training)"""
         # 1. Actor forward
         x = self.actor_net(state)
-        x = x.reshape(x.size(0), -1)
+        # 提取最后一个时间步
+        x = x[:, -1, :]
         logits = self.actor_head(x)
 
         # 2. Critic forward
         v_x = self.critic_net(state)
-        v_x = v_x.reshape(v_x.size(0), -1)
+        # 提取最后一个时间步
+        v_x = v_x[:, -1, :]
         value = self.critic_head(v_x)
 
         probs = torch.softmax(logits, dim=-1)
