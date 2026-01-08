@@ -47,6 +47,8 @@ class TransformerBlock(nn.Module):
         # mask shape: (Batch, Seq_Len), True 表示需要被忽略
         mask = (x.abs().sum(dim=-1) == 0)
 
+        mask[:, -1] = False
+
         # Embedding + Positional Encoding
         x_emb = self.embedding(x)
         # 截取对应长度的位置编码 (兼容可能的变长输入，虽然 Config 固定为 5)
