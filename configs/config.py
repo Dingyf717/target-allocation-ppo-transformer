@@ -7,7 +7,7 @@ class Config:
     # 请务必保留 Phase 1 和 Phase 2 添加的 CONSTANTS (PARAM_*, WEATHER_*)
 
     # ================= 物理模型参数 (回顾) =================
-    PARAM_ZETA_D = 100.0
+    PARAM_ZETA_D = 150.0
     PARAM_K = 5.0
     PARAM_C1 = 0.75
     PARAM_C2 = 0.25
@@ -43,7 +43,7 @@ class Config:
     INTERCEPT_RAD = 3.0
 
     # 成本与权重
-    COST_WEIGHT_OMEGA = 0.1
+    COST_WEIGHT_OMEGA = 0.0
 
     # 这些常数用于 Phase 2 的环境生成 (Partial Mod)
     WEATHER_SPEED_FACTOR = 0.85
