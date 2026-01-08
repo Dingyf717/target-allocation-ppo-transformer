@@ -43,7 +43,7 @@ class Config:
     INTERCEPT_RAD = 3.0
 
     # 成本与权重
-    COST_WEIGHT_OMEGA = 0.5
+    COST_WEIGHT_OMEGA = 0.1
 
     # 这些常数用于 Phase 2 的环境生成 (Partial Mod)
     WEATHER_SPEED_FACTOR = 0.85
