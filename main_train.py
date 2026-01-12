@@ -9,13 +9,24 @@ from envs.uav_env import UAVEnv
 from agents.ppo import PPOAgent
 
 
-def save_learning_curve(rewards, save_path):
-    plt.figure(figsize=(10, 5))
-    plt.plot(rewards)
-    plt.title("Learning Curve (Average Reward)")
+def save_learning_curve(rewards, q0s, save_path):
+    plt.figure(figsize=(12, 6))
+
+    # 绘制 Reward 曲线 (蓝色)
+    plt.plot(rewards, label='Average Reward', color='tab:blue', linewidth=1.5)
+
+    # 绘制 Q0 曲线 (橙色)
+    # 只有当 q0s 不为空时才画（兼容性处理）
+    if q0s is not None and len(q0s) > 0:
+        plt.plot(q0s, label='Episode Q0 (Value Est.)', color='tab:orange', linewidth=1.5, linestyle='--')
+
+    plt.title("Learning Curve: Reward vs Q0")
     plt.xlabel("Episode")
-    plt.ylabel("Reward")
-    plt.grid(True)
+    plt.ylabel("Value")
+    plt.legend(loc='lower right')  # 图例放在右下角，避免遮挡
+    plt.grid(True, linestyle=':', alpha=0.6)
+
+    plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
 
@@ -39,6 +50,11 @@ def train():
     # 统计变量
     ep_rewards = []  # 记录每回合总奖励
     avg_rewards = []  # 记录平均奖励（用于画图）
+
+    # 【新增】Q0 统计变量
+    ep_q0s = []  # 记录每回合的 Q0
+    avg_q0s = []  # 记录平均 Q0 (用于画图)
+
     best_reward = -np.inf  # 记录最高分
 
     # ================= 3. 主训练循环 (Algorithm 1) =================
@@ -49,6 +65,19 @@ def train():
         # state = env.reset(full_reset=True)
         current_ep_reward = 0
         done = False
+
+        # --- 【核心修改】获取当前回合初始状态的 Value (Q0) ---
+        # 此时 state 是初始状态 S_0
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+
+        with torch.no_grad():
+            # 直接调用 old_policy 获取 value。
+            # 根据 transformer_net.py, get_action 返回: action, log_prob, value, entropy
+            # 我们只需要第三个返回值 value
+            _, _, q0_val, _ = agent.policy_old.get_action(state_tensor)
+
+            # 提取标量值
+            current_q0 = q0_val.item()
 
         # --- 一个回合 (Episode) ---
         while not done:
@@ -76,9 +105,16 @@ def train():
         avg_reward = np.mean(ep_rewards[-50:])  # 计算最近50回合的滑动平均
         avg_rewards.append(avg_reward)
 
-        # 打印进度
+        # 2. 【新增】记录 Q0
+        ep_q0s.append(current_q0)
+        # 为了曲线平滑，我们也取最近 50 个的平均值，或者直接画原始值(论文看似有波动，可能是原始值)
+        # 这里建议先做平滑，画出来好看；如果想看原始波动，就直接 avg_q0 = current_q0
+        avg_q0 = np.mean(ep_q0s[-50:])
+        avg_q0s.append(avg_q0)
+
+        # 3. 打印进度 (增加 Q0 显示)
         if i_episode % 10 == 0:
-            print(f"Episode: {i_episode:4d} | Reward: {current_ep_reward:8.2f} | Avg Reward: {avg_reward:8.2f}")
+            print(f"Episode: {i_episode:4d} | Reward: {current_ep_reward:8.2f} | Avg R: {avg_reward:8.2f} | Q0: {avg_q0:6.2f}")
 
         # 保存最佳模型
         if avg_reward > best_reward:
@@ -86,9 +122,9 @@ def train():
             torch.save(agent.policy.state_dict(), f"{model_dir}/best_model.pth")
             print(f"   >>> 新的最佳模型已保存! Avg Reward: {best_reward:.2f}")
 
-        # 定期保存曲线图
+        # 4. 【修改】定期保存曲线图 (传入两个列表)
         if i_episode % 100 == 0:
-            save_learning_curve(avg_rewards, f"{log_dir}/learning_curve.png")
+            save_learning_curve(avg_rewards, avg_q0s, f"{log_dir}/learning_curve.png")
 
         # # [新增] 在每个 Episode 结束时，更新学习率调度器
         # agent.update_lr()
