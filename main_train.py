@@ -44,7 +44,9 @@ def train():
     # ================= 3. 主训练循环 (Algorithm 1) =================
     for i_episode in range(1, cfg.MAX_EPISODES + 1):
 
-        state = env.reset(full_reset=(i_episode == 1 or i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
+        # state = env.reset(full_reset=(i_episode == 1 or i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
+        # 每一回合都完全重置环境，生成新的 UAV 和 Target 位置
+        state = env.reset(full_reset=True)
         current_ep_reward = 0
         done = False
 

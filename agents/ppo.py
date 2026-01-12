@@ -91,7 +91,8 @@ class PPOAgent:
 
         for _ in range(cfg.K_EPOCHS):
             # 使用 BatchSampler 生成 Mini-batches
-            sampler = BatchSampler(SubsetRandomSampler(range(dataset_size)), batch_size, drop_last=False)
+            # sampler = BatchSampler(SubsetRandomSampler(range(dataset_size)), batch_size, drop_last=False)
+            sampler = BatchSampler(SubsetRandomSampler(range(dataset_size)), batch_size, drop_last=True)
 
             for indices in sampler:
                 indices = torch.tensor(indices, device=self.device)
