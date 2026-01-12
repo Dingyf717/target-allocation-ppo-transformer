@@ -274,7 +274,7 @@ class UAVEnv(gym.Env):
             raw_reward = J_X * (float(N0) / float(M))  # 覆盖率折损
 
         # Reward Scaling (保持原代码的工程技巧)
-        return raw_reward
+        return raw_reward / 100.0
 
     def step(self, action):
         curr_uav = self.uavs[self.uav_idx]

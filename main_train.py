@@ -44,9 +44,9 @@ def train():
     # ================= 3. 主训练循环 (Algorithm 1) =================
     for i_episode in range(1, cfg.MAX_EPISODES + 1):
 
-        # state = env.reset(full_reset=(i_episode == 1 or i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
+        state = env.reset(full_reset=(i_episode == 1 or i_episode % 200 == 0))  # 结合之前的 Curriculum Learning 修改
         # 每一回合都完全重置环境，生成新的 UAV 和 Target 位置
-        state = env.reset(full_reset=True)
+        # state = env.reset(full_reset=True)
         current_ep_reward = 0
         done = False
 
@@ -89,6 +89,15 @@ def train():
         # 定期保存曲线图
         if i_episode % 100 == 0:
             save_learning_curve(avg_rewards, f"{log_dir}/learning_curve.png")
+
+        # [新增] 在每个 Episode 结束时，更新学习率调度器
+        agent.update_lr()
+
+        # ... (日志打印代码) ...
+        if i_episode % 10 == 0:
+            # 你甚至可以在这里把当前 LR 打印出来监控
+            curr_lr = agent.optimizer.param_groups[0]['lr']
+            print(f"Ep: {i_episode} | Reward: {current_ep_reward:.2f} | LR: {curr_lr:.2e}")
 
     print("============================================================================================")
     print("训练结束！")
