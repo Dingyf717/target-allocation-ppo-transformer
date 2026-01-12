@@ -21,12 +21,12 @@ class PPOAgent:
             {'params': self.policy.critic_net.parameters(), 'lr': cfg.LR_CRITIC},
         ])
 
-        # 2. [新增] 定义学习率调度器 (Scheduler)
-        # 方案：StepLR。每过 step_size 个单位，LR = LR * gamma
-        # 这里 step_size 设为 200，意味着每 200 个 Episode 衰减一次
-        # gamma 设为 0.9，意味着每次衰减为原来的 90%
-        # 这样到 Episode 2000 时，LR 约为初始的 0.9^10 ≈ 0.35倍，既能稳住后期，又不会太小导致学不动
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=200, gamma=0.9)
+        # # 2. [新增] 定义学习率调度器 (Scheduler)
+        # # 方案：StepLR。每过 step_size 个单位，LR = LR * gamma
+        # # 这里 step_size 设为 200，意味着每 200 个 Episode 衰减一次
+        # # gamma 设为 0.9，意味着每次衰减为原来的 90%
+        # # 这样到 Episode 2000 时，LR 约为初始的 0.9^10 ≈ 0.35倍，既能稳住后期，又不会太小导致学不动
+        # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=200, gamma=0.9)
 
         self.policy_old = TransformerActorCritic().to(self.device)
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -43,11 +43,11 @@ class PPOAgent:
         self.mse_loss = nn.MSELoss()
 
     # 3. [新增] 外部调用接口
-    def update_lr(self):
-        self.scheduler.step()
-        # 可选：打印当前学习率方便调试
-        current_lr = self.optimizer.param_groups[0]['lr']
-        # print(f"Learning Rate Updated: {current_lr:.2e}")
+    # def update_lr(self):
+    #     self.scheduler.step()
+    #     # 可选：打印当前学习率方便调试
+    #     current_lr = self.optimizer.param_groups[0]['lr']
+    #     # print(f"Learning Rate Updated: {current_lr:.2e}")
 
     def select_action(self, state):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
