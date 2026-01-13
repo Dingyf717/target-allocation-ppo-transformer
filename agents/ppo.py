@@ -99,6 +99,12 @@ class PPOAgent:
         old_logprobs = torch.cat(self.buffer['logprobs'], dim=0).to(self.device)
         old_values = values.detach()
 
+        # 记录累加值
+        sum_loss_actor = 0
+        sum_loss_critic = 0
+        sum_entropy = 0
+        update_count = 0
+
         # 2. PPO 更新循环 (Mini-Batch Update)
         dataset_size = len(old_states)
         batch_size = cfg.BATCH_SIZE
@@ -153,11 +159,26 @@ class PPOAgent:
                 # Gradient Clipping (Table I: threshold=1)
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), cfg.GRAD_NORM_CLIP)
 
+                # --- 【新增】收集统计值 ---
+                sum_loss_actor += loss_actor.item()
+                # 注意：critic loss 我们记录原始的 loss_v1 或加权的 loss_critic 都可以
+                sum_loss_critic += loss_critic.item()
+                sum_entropy += dist_entropy.mean().item()
+                update_count += 1
+
                 self.optimizer.step()
 
         # 3. 更新旧策略
         self.policy_old.load_state_dict(self.policy.state_dict())
         self.clear_buffer()
+
+        # --- 【修改】返回平均 Loss ---
+        if update_count == 0: return None
+        return {
+            "loss_actor": sum_loss_actor / update_count,
+            "loss_critic": sum_loss_critic / update_count,
+            "entropy": sum_entropy / update_count
+        }
 
     def clear_buffer(self):
         self.buffer = {k: [] for k in self.buffer}

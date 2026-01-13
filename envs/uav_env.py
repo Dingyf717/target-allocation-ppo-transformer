@@ -350,4 +350,21 @@ class UAVEnv(gym.Env):
         # 如果 done=True，_get_obs 通常返回全零或最后状态，根据你的实现逻辑
         obs = self._get_obs()
 
-        return obs, reward, done, {}
+        # ================== 【新增修改开始】 ==================
+        # 在 info 中返回真实的目标函数值 J(X)，用于画出论文 Fig 3 的曲线
+        info = {}
+        if done:
+            # 调用现有的 _calc_J_X() 方法获取纯粹的 J(X)
+            true_objective_value = self._calc_J_X()
+            info['final_J'] = true_objective_value
+        # ================== 【新增修改结束】 ==================
+
+        # 在 return 之前收集信息
+        info = {
+            "J_val": self._calc_J_X(),  # 当前方案的 J(X)
+            "num_assigned": sum([1 for t in self.targets if len(t.locked_by_uavs) > 0]),  # 覆盖目标数
+            "is_valid_action": (reward != 0) if action == 1 else None,  # 是否是有效分配
+            # 也可以在这里统计一下当前的平均 p_damage (可选，会增加一点计算量)
+        }
+
+        return obs, reward, done, info

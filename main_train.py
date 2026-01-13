@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import csv  # 【新增】导入 csv 模块
 from datetime import datetime
 from configs.config import cfg
 from envs.uav_env import UAVEnv
@@ -47,6 +48,20 @@ def train():
     model_dir = f"./saved_models/{time_str}"
     os.makedirs(model_dir, exist_ok=True)
 
+    # --- 【新增】初始化 CSV 日志文件 ---
+    csv_path = os.path.join(log_dir, "training_stats.csv")
+    csv_file = open(csv_path, mode='w', newline='', encoding='utf-8')
+    csv_writer = csv.writer(csv_file)
+
+    # 写入表头 (Header)
+    csv_writer.writerow([
+        "Episode", "Avg_Reward", "Avg_Q0",  # 基础指标
+        "Avg_J_Value", "Max_Coverage",  # 环境物理指标
+        "Action1_Ratio", "Valid_Assign_Rate",  # 动作统计
+        "Loss_Critic", "Loss_Actor", "Entropy"  # 训练指标
+    ])
+    print(f"训练日志将保存至: {csv_path}")
+
     # 统计变量
     ep_rewards = []  # 记录每回合总奖励
     avg_rewards = []  # 记录平均奖励（用于画图）
@@ -79,17 +94,41 @@ def train():
             # 提取标量值
             current_q0 = q0_val.item()
 
+        # --- 【新增】本回合内的统计变量 ---
+        ep_total_J = 0  # 累加本回合所有步的 J(X)
+        ep_steps = 0  # 记录步数
+        ep_max_cov = 0  # 记录本回合最大覆盖数
+        ep_action1_cnt = 0  # 记录尝试 Assign 的次数
+        ep_valid_cnt = 0  # 记录有效 Assign 的次数
+
         # --- 一个回合 (Episode) ---
         while not done:
             # a. select action
             action = agent.select_action(state)
             # b. step
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, info = env.step(action)
+
+            # # 【新增修改】 奖励缩放 (Reward Scaling)
+            # # 将奖励缩小 100 倍，传给 Agent 训练用。
+            # # 这样 Agent 看到的奖励是 0.16，而不是 16.0，Critic 网络更容易拟合。
+            # scaled_reward = reward / 100.0
+
             # c. store
             agent.store_transition(reward, done)
             # d. update state
             state = next_state
             current_ep_reward += reward
+
+            # --- 收集统计数据 ---
+            ep_steps += 1
+            if info:
+                ep_total_J += info.get('J_val', 0)
+                ep_max_cov = max(ep_max_cov, info.get('num_assigned', 0))
+
+                if action == 1:
+                    ep_action1_cnt += 1
+                    if info.get('is_valid_action', False):
+                        ep_valid_cnt += 1
 
             # --- 回合结束后的处理 ---
 
@@ -97,8 +136,9 @@ def train():
         # 这样保证了 Buffer 里包含的永远是“完整的 Episode”，不会出现截断
         # 建议阈值设为 Batch_Size 的 4~8 倍（例如 256~512 步）
         # 这样如果是短 Episode (30步) 会攒好几个才更新；如果是长 Episode (300步) 每次都会更新
+        ppo_stats = None
         if len(agent.buffer['states']) >= cfg.BATCH_SIZE * 4:
-            agent.update()
+            ppo_stats = agent.update()
 
         # --- 记录与日志 ---
         ep_rewards.append(current_ep_reward)
@@ -111,6 +151,33 @@ def train():
         # 这里建议先做平滑，画出来好看；如果想看原始波动，就直接 avg_q0 = current_q0
         avg_q0 = np.mean(ep_q0s[-50:])
         avg_q0s.append(avg_q0)
+
+        # --- 【新增】每 10 轮输出并保存一次 CSV ---
+        if i_episode % 10 == 0:
+            # 1. 计算本回合的统计均值
+            avg_J_val = ep_total_J / max(1, ep_steps)
+            act1_ratio = ep_action1_cnt / max(1, ep_steps)
+            valid_rate = ep_valid_cnt / max(1, ep_action1_cnt)
+
+            # 2. 获取 Loss (如果本轮没有更新，就用 0.0 或 None 占位)
+            l_crt = ppo_stats['loss_critic'] if ppo_stats else 0.0
+            l_act = ppo_stats['loss_actor'] if ppo_stats else 0.0
+            entr = ppo_stats['entropy'] if ppo_stats else 0.0
+
+            # 3. 打印到控制台 (Console)
+            print(f"Ep {i_episode:4d} | R: {avg_reward:6.2f} | J: {avg_J_val:5.2f} | "
+                  f"Cov: {ep_max_cov:2d} | Valid%: {valid_rate:4.2f} | "
+                  f"L_Crt: {l_crt:6.4f} | Ent: {entr:5.3f}")
+
+            # 4. 写入 CSV 文件 (File)
+            csv_writer.writerow([
+                i_episode,
+                f"{avg_reward:.4f}", f"{avg_q0:.4f}",
+                f"{avg_J_val:.4f}", ep_max_cov,
+                f"{act1_ratio:.4f}", f"{valid_rate:.4f}",
+                f"{l_crt:.6f}", f"{l_act:.6f}", f"{entr:.6f}"
+            ])
+            csv_file.flush()  # 立即写入磁盘，防止中断丢失
 
         # 3. 打印进度 (增加 Q0 显示)
         if i_episode % 10 == 0:
@@ -149,7 +216,7 @@ def train():
         final_model_path = f"{model_dir}/final_model.pth"
         torch.save(agent.policy.state_dict(), final_model_path)
 
-
+    csv_file.close()
     print("============================================================================================")
     print("训练结束！")
     print(f"模型已保存至: {model_dir}")
