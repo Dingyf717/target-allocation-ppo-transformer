@@ -18,7 +18,7 @@ class TransformerBlock(nn.Module):
     结构: Linear Embedding -> Transformer Encoder
     """
 
-    def __init__(self):
+    def __init__(self, num_layers=cfg.NUM_LAYERS):
         super(TransformerBlock, self).__init__()
         # 1. Embedding 层: 将 State (14维) 映射到 Embed Dim (128维)
         self.embedding = nn.Sequential(
@@ -38,7 +38,11 @@ class TransformerBlock(nn.Module):
             dropout=0.0,
             batch_first=True
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
+        # self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
+        # 使用传入的 num_layers
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+
 
     def forward(self, x):
         # x shape: (Batch, Seq_Len, State_Dim)
@@ -69,7 +73,7 @@ class TransformerActorCritic(nn.Module):
         self.hidden_dim = cfg.EMBED_DIM
 
         # --- Actor Network ---
-        self.actor_net = TransformerBlock()
+        self.actor_net = TransformerBlock(num_layers=1)
         # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Softmax
         self.actor_head = nn.Sequential(
             init_layer(nn.Linear(self.hidden_dim, 64)),  # 输入改为 128 (EMBED_DIM)
@@ -78,7 +82,7 @@ class TransformerActorCritic(nn.Module):
         )
 
         # --- Critic Network ---
-        self.critic_net = TransformerBlock()
+        self.critic_net = TransformerBlock(num_layers=2)
         # Head 结构依据 Fig 2: FC -> ReLU -> FC -> Output
         self.critic_head = nn.Sequential(
             init_layer(nn.Linear(self.hidden_dim, 64)),  # 输入改为 128 (EMBED_DIM)

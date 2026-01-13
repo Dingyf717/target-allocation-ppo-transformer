@@ -116,11 +116,18 @@ def train():
         if i_episode % 10 == 0:
             print(f"Episode: {i_episode:4d} | Reward: {current_ep_reward:8.2f} | Avg R: {avg_reward:8.2f} | Q0: {avg_q0:6.2f}")
 
-        # 保存最佳模型
-        if avg_reward > best_reward:
-            best_reward = avg_reward
-            torch.save(agent.policy.state_dict(), f"{model_dir}/best_model.pth")
-            print(f"   >>> 新的最佳模型已保存! Avg Reward: {best_reward:.2f}")
+        # # 保存最佳模型
+        # if avg_reward > best_reward:
+        #     best_reward = avg_reward
+        #     torch.save(agent.policy.state_dict(), f"{model_dir}/best_model.pth")
+        #     print(f"   >>> 新的最佳模型已保存! Avg Reward: {best_reward:.2f}")
+
+        # 【新增逻辑】: 定期保存 Checkpoint (每200轮，对应环境重置周期)
+        # 这样你可以检查不同训练阶段的模型表现
+        if i_episode % 200 == 0:
+            ckpt_path = f"{model_dir}/checkpoint_ep{i_episode}.pth"
+            torch.save(agent.policy.state_dict(), ckpt_path)
+            print(f"   >>> Checkpoint 保存: {ckpt_path}")
 
         # 4. 【修改】定期保存曲线图 (传入两个列表)
         if i_episode % 100 == 0:
@@ -134,6 +141,14 @@ def train():
         #     # 你甚至可以在这里把当前 LR 打印出来监控
         #     curr_lr = agent.optimizer.param_groups[0]['lr']
         #     print(f"Ep: {i_episode} | Reward: {current_ep_reward:.2f} | LR: {curr_lr:.2e}")
+
+        # ------------------------------------------------------------------
+        # 【修改点 2】: 强制保存最终模型 (Final Model)
+        # ------------------------------------------------------------------
+        # 论文中展示的效果是 Agent 收敛后的表现，因此必须保存最后一次迭代的模型
+        final_model_path = f"{model_dir}/final_model.pth"
+        torch.save(agent.policy.state_dict(), final_model_path)
+
 
     print("============================================================================================")
     print("训练结束！")
