@@ -236,16 +236,7 @@ class UAVEnv(gym.Env):
             prev_joint_p_damage_only=prev_joint_p_pure
         )
 
-        # --- 【修复】归一化 ---
-        norm_feat = np.copy(raw_feat)
-        # 坐标除以地图大小，价值除以最大价值
-        norm_feat[3] /= 180.0  # x
-        norm_feat[4] /= 160.0  # y
-        norm_feat[7] /= 180.0  # target_x
-        norm_feat[8] /= 160.0  # target_y
-        norm_feat[9] /= 16.0  # value
-        # 距离除以对角线长度 (约240)
-        norm_feat[10] /= 240.0
+
 
         self.state_buffer.append(current_feat)
         return np.array(self.state_buffer, dtype=np.float32)
@@ -299,12 +290,7 @@ class UAVEnv(gym.Env):
         else:
             raw_reward = J_X * (float(N0) / float(M))  # 覆盖率折损
 
-        # --- 【修复】奖励缩放 ---
-        # 估算最大可能得分约为 2 * 总价值 (10个目标 * 平均价值6 * 2倍 = 120左右)
-        # 将其缩放到 0~10 的范围
-        normalized_reward = raw_reward / 10.0
-
-        return normalized_reward
+        return raw_reward
 
     def step(self, action):
         curr_uav = self.uavs[self.uav_idx]
