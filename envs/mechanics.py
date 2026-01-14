@@ -76,7 +76,7 @@ def calc_dist_score(dist, is_obstacle=False):
     if is_obstacle:
         # 对于障碍物 (NFZ/Interceptor)，D_mid = 0
         D_mid = 0.0
-        zeta = 25
+        zeta = 10
     else:
         # 对于 Target，D_mid 应该是最优攻击距离
         # 论文中 D_mid = [(x_max^T - x_min^U) + (x_min^T - x_max^U)] / 2
