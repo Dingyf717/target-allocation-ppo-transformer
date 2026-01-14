@@ -1,109 +1,113 @@
-# main.py
 import numpy as np
-import torch
-from configs.config import cfg
+import pandas as pd
 from envs.entities import UAV, Target, NoFlyZone, Interceptor
-from envs.mechanics import get_state_vector
-from agents.ppo import PPOAgent
+from envs.mechanics import calc_dist_score, calc_angle_score, calc_damage_prob, calc_penetration_prob, calc_advantage
+from configs.config import cfg
 
 
-def test_pipeline():
-    print("========== 1. 配置加载测试 ==========")
-    print(f"地图大小: {cfg.MAP_WIDTH}x{cfg.MAP_HEIGHT} km")
-    print(f"PPO设备: {'cuda' if torch.cuda.is_available() else 'cpu'}")
-    print(f"网络输入维度: {cfg.STATE_DIM}, 嵌入维度: {cfg.EMBED_DIM}")
-    print("配置加载成功！\n")
+def run_diagnostics():
+    print("=================================================================")
+    print("              UAV Swarm 物理模型诊断工具 (Diagnostics)           ")
+    print("=================================================================")
+    print(f"当前配置参数检测:")
+    print(f"  - PARAM_ZETA_D (Config): {cfg.PARAM_ZETA_D} (注意：障碍物应在 mechanics.py 中硬编码为 25.0)")
+    print(f"  - PARAM_K: {cfg.PARAM_K}")
+    print("=================================================================\n")
 
-    print("========== 2. 实体初始化测试 ==========")
-    # 随机生成一个 UAV 和一个 Target
-    uav = UAV(
-        id=0,
-        pos=np.array([5.0, 5.0]),
-        velocity=np.array([0.1, 0.0]),
-        max_speed=0.5,
-        load=10.0
-    )
-    target = Target(
-        id=0,
-        pos=np.array([15.0, 15.0]),
-        value=10.0
-    )
-    nfz_list = [NoFlyZone(id=0, pos=np.array([10.0, 10.0]), radius=2.0)]
-    interceptor_list = []
+    # ================= [测试场景 1]：最佳攻击距离验证 (D_mid) =================
+    print(">>> [Test 1] 攻击距离评分验证 (Target Distance Score)")
+    print("    * 论文设定: D_mid ≈ 155km 时分数最高 (接近1.0)")
+    print("    * 如果 mechanics.py 未修改 (D_mid=0)，则距离越近分越高")
 
-    print(f"UAV 位置: {uav.pos}")
-    print(f"Target 位置: {target.pos}")
-    print("实体初始化成功！\n")
+    # 构建一个静止 UAV 和不同距离的目标
+    uav = UAV(id=0, pos=np.array([0, 0]), velocity=np.array([100, 0]), max_speed=100, load=1.0)
 
-    print("========== 3. 物理引擎计算测试 ==========")
-    # 测试 mechanics.py 中的核心函数
-    try:
-        state_vec = get_state_vector(uav, target, nfz_list, interceptor_list)
-        print(f"状态向量内容: {state_vec}")
-        print(f"状态向量形状: {state_vec.shape}")
+    test_dists = [10, 50, 100, 150, 155, 160, 200]
+    results_1 = []
 
-        # 维度检查断言
-        assert state_vec.shape == (cfg.STATE_DIM,), \
-            f"维度错误！期望 ({cfg.STATE_DIM},), 实际 {state_vec.shape}"
+    for d in test_dists:
+        # 目标在 x 轴正方向 d 处
+        tgt = Target(id=0, pos=np.array([float(d), 0]), value=10.0)
 
-        # 检查数值是否包含 NaN
-        if np.isnan(state_vec).any():
-            print("警告: 状态向量包含 NaN！请检查除零错误。")
-        else:
-            print("物理计算数值正常。")
+        # 只计算距离分数 (假设 mechanics.py 里 calc_dist_score 第二个参数 False 代表目标)
+        dist_score = calc_dist_score(d, is_obstacle=False)
 
-    except Exception as e:
-        print(f"物理引擎报错: {e}")
-        return
-    print("物理引擎测试成功！\n")
+        results_1.append({
+            "Distance (km)": d,
+            "Dist Score (0-1)": f"{dist_score:.4f}",
+            "评价": "Excellent" if dist_score > 0.9 else "Low"
+        })
 
-    print("========== 4. 智能体与网络测试 ==========")
-    try:
-        # 实例化 PPO Agent
-        agent = PPOAgent()
-        print("PPO Agent 初始化完成，网络结构如下:")
-        print(agent.policy)  # 打印网络结构看是否符合 Transformer 定义
+    print(pd.DataFrame(results_1))
+    print("\n-----------------------------------------------------------------\n")
 
-        # 测试动作选择 (Select Action)
-        print("\n正在尝试将状态输入网络...")
-        action = agent.select_action(state_vec)
+    # ================= [测试场景 2]：障碍物威胁范围验证 (Zeta) =================
+    print(">>> [Test 2] 障碍物威胁范围验证 (Obstacle Threat)")
+    print("    * 论文设定: Zeta=25.0。")
+    print("    * 预期: 距离 25km 时分数约 0.36; 距离 50km (2*Zeta) 时分数应 < 0.02 (安全)。")
+    print("    * 如果未修复 (Zeta=150)，50km 处分数仍高达 0.89 (极度危险)。")
 
-        print(f"网络输出动作: {action} (0=不选, 1=选)")
-        print(f"Buffer 当前长度: {len(agent.buffer['states'])}")
+    test_obs_dists = [10, 25, 50, 75, 100, 150]
+    results_2 = []
 
-        # 检查 Buffer 中的 logprob 是否有梯度 (应该没有，因为是 detach 的，或者是 item)
-        # 这里只要确认能存进去就行
+    for d in test_obs_dists:
+        # 模拟一个距离 d 的障碍物
+        dist_score_obs = calc_dist_score(d, is_obstacle=True)
 
-    except Exception as e:
-        print(f"智能体报错: {e}")
-        import traceback
-        traceback.print_exc()
-        return
-    print("智能体前向推理成功！\n")
+        status = "BUG (Zeta过大)" if (d == 50 and dist_score_obs > 0.1) else "Normal"
+        if d == 25 and 0.3 < dist_score_obs < 0.4: status = "Paper Match (Zeta≈25)"
 
-    print("========== 5. 模拟一次更新 (Update) ==========")
-    try:
-        # 伪造一些数据填满 Buffer 以触发更新逻辑测试
-        # 只需要存入几个数据，确保 update() 函数里的 tensor 拼接和运算不报错
-        agent.store_transition(reward=1.0, done=False)  # 对应刚才的那次动作
+        results_2.append({
+            "Dist to Obs (km)": d,
+            "Threat Score (E_d)": f"{dist_score_obs:.4f}",
+            "Penetration Limit (1-E_d)": f"{1.0 - dist_score_obs:.4f}",
+            "诊断": status
+        })
 
-        # 再多存两个，模拟序列数据
-        for _ in range(3):
-            agent.select_action(state_vec)
-            agent.store_transition(reward=0.5, done=False)
+    print(pd.DataFrame(results_2))
+    print("\n-----------------------------------------------------------------\n")
 
-        print("正在尝试执行 agent.update()...")
-        agent.update()
-        print("PPO 更新过程无报错。")
+    # ================= [测试场景 3]：综合突防概率 (正对撞击 vs 侧向规避) =================
+    print(">>> [Test 3] 综合突防概率验证 (Penetration Probability)")
+    print("    * 场景: UAV 向右飞 (Vel=[1,0])，正前方 50km 处有一个 NFZ。")
 
-    except Exception as e:
-        print(f"更新逻辑报错: {e}")
-        import traceback
-        traceback.print_exc()
-        return
+    uav_pos = np.array([0.0, 0.0])
+    uav_vel = np.array([300.0, 0.0])  # 向右飞
+    uav = UAV(0, uav_pos, uav_vel, 300.0, 1.0)
 
-    print("\n🎉🎉🎉 恭喜！所有模块联调测试通过！ 🎉🎉🎉")
+    target = Target(0, np.array([200.0, 0.0]), 10.0)  # 目标在正前方很远
+
+    # Case A: NFZ 在正前方 (必死)
+    nfz_center = NoFlyZone(0, np.array([50.0, 0.0]), radius=10.0)
+
+    # Case B: NFZ 在侧方 50km (安全)
+    nfz_side = NoFlyZone(1, np.array([50.0, 50.0]), radius=10.0)
+
+    # 计算 A
+    print("3.1 [高危场景] NFZ 在正前方 50km:")
+    p_pen_a = calc_penetration_prob(uav, target, [nfz_center], [])
+    ang_score_a = calc_angle_score(uav.pos, uav.velocity, nfz_center.pos)
+    dist_score_a = calc_dist_score(50.0, is_obstacle=True)
+
+    print(f"   - Angle Score (1.0=正对): {ang_score_a:.4f}")
+    print(f"   - Dist Score  (Threat):   {dist_score_a:.4f}")
+    print(f"   - Penetration Prob:       {p_pen_a:.4f}  <-- 预期应接近 0.0")
+
+    # 计算 B
+    print("\n3.2 [安全场景] NFZ 在侧方 50km (直线距离70km):")
+    p_pen_b = calc_penetration_prob(uav, target, [nfz_side], [])
+    dist_b = np.linalg.norm(uav.pos - nfz_side.pos)
+    ang_score_b = calc_angle_score(uav.pos, uav.velocity, nfz_side.pos)
+    dist_score_b = calc_dist_score(dist_b, is_obstacle=True)
+
+    print(f"   - Real Dist:              {dist_b:.1f} km")
+    print(f"   - Angle Score (1.0=正对): {ang_score_b:.4f} (侧向应很小)")
+    print(f"   - Dist Score:             {dist_score_b:.4f}")
+    print(f"   - Penetration Prob:       {p_pen_b:.4f}  <-- 预期应接近 1.0")
+
+    print("\n-----------------------------------------------------------------\n")
+    print("诊断结束。请根据上述表格确认 mechanics.py 是否修改正确。")
 
 
 if __name__ == "__main__":
-    test_pipeline()
+    run_diagnostics()

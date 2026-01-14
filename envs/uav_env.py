@@ -142,17 +142,32 @@ class UAVEnv(gym.Env):
             self.targets.append(tgt)
 
         # --- 3. 生成环境障碍 (Table II) ---
+        self.nfz_list = []  # 确保清空
         # 禁飞区 (NFZ)
         for i in range(cfg.NUM_NFZ):
             radius = np.random.uniform(5, 10)
-            pos = np.random.rand(2) * [cfg.MAP_WIDTH, cfg.MAP_HEIGHT]
+            # 修改位置生成逻辑
+            pos_x = np.random.uniform(120, 140)
+            pos_y = np.random.uniform(0, cfg.MAP_HEIGHT)
+            pos = np.array([pos_x, pos_y])
             self.nfz_list.append(NoFlyZone(id=i, pos=pos, radius=radius))
 
         # 拦截者 (Interceptor)
+        self.interceptors = []  # 确保清空
         for i in range(cfg.NUM_INTERCEPTORS):
             radius = cfg.INTERCEPT_RAD  # 3.0 km
-            pos = np.random.rand(2) * [cfg.MAP_WIDTH, cfg.MAP_HEIGHT]
-            self.interceptors.append(Interceptor(id=i, pos=pos, radius=radius))
+            # 修改位置生成逻辑
+            pos_x = np.random.uniform(140, 160)
+            pos_y = np.random.uniform(0, cfg.MAP_HEIGHT)
+            pos = np.array([pos_x, pos_y])
+            # 速度生成逻辑保持你之前的修复 (0.30 - 0.32)
+            inter_speed = np.random.uniform(0.30, 0.32)
+            angle = np.random.uniform(0, 2 * np.pi)
+            vel = np.array([np.cos(angle), np.sin(angle)]) * inter_speed
+
+            inter = Interceptor(id=i, pos=pos, radius=radius)
+            inter.velocity = vel  # 动态属性
+            self.interceptors.append(inter)
 
         # 初始打乱目标顺序
         np.random.shuffle(self.targets)
