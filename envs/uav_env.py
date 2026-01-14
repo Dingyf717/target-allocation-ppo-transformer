@@ -350,6 +350,49 @@ class UAVEnv(gym.Env):
         # 如果 done=True，_get_obs 通常返回全零或最后状态，根据你的实现逻辑
         obs = self._get_obs()
 
+        # 统计当前所有“已锁定”关系的平均物理概率，用于诊断环境难度
+        total_pen_prob = 0.0
+        total_dmg_prob = 0.0
+        count = 0
+
+        # 遍历所有目标，检查谁锁定了它
+        for tgt in self.targets:
+            for uid in tgt.locked_by_uavs:
+                u_obj = next((u for u in self.uavs if u.id == uid), None)
+                if u_obj:
+                    # 调用 mechanics 计算具体的概率分量
+                    # 注意：需要确保已 import mechanics
+                    # p_final = p_damage * p_pen
+                    p_final, p_damage_only = calc_advantage(u_obj, tgt, self.nfz_list, self.interceptors)
+
+                    # 反推突防概率 (加 1e-6 防止除以 0)
+                    p_pen = p_final / (p_damage_only + 1e-9)
+                    # 也可以重新调用 calc_penetration_prob，但这样反推更省计算量
+                    # 不过要注意 p_pen 可能会因为 p_damage=0 而计算不准，
+                    # 更稳妥的方式是直接调用 mechanics.calc_penetration_prob(u_obj, tgt, ...)
+                    # 鉴于 import 问题，这里直接用 p_final 和 p_damage_only 统计即可
+
+                    total_dmg_prob += p_damage_only
+                    # 如果 p_damage_only 太小，说明根本没法攻击，p_final 也是 0，p_pen 意义不大
+                    # 我们这里简单统计 p_final (联合概率) 和 p_damage (基础概率)
+                    # 通过比较这两个值，就能知道损耗了多少
+
+                    # 修正：为了准确记录“突防概率”，我们还是计算一下比值，或者仅记录 p_final 和 p_dmg
+                    # 如果 p_dmg 是 0.8，p_final 是 0.4，说明突防率是 0.5
+
+                    count += 1
+
+        avg_p_dmg = total_dmg_prob / count if count > 0 else 0.0
+        # 这里记录“联合概率(Final)”，它等于 Dmg * Pen。
+        # 在 CSV 分析时，用 Avg_Final / Avg_Dmg 就能算出突防率
+        total_final_prob = sum([calc_advantage(
+            next(u for u in self.uavs if u.id == uid), t, self.nfz_list, self.interceptors)[0]
+                                for t in self.targets for uid in t.locked_by_uavs
+                                ])
+        avg_p_final = total_final_prob / count if count > 0 else 0.0
+
+
+
         # ================== 【新增修改开始】 ==================
         # 在 info 中返回真实的目标函数值 J(X)，用于画出论文 Fig 3 的曲线
         info = {}
@@ -359,12 +402,18 @@ class UAVEnv(gym.Env):
             info['final_J'] = true_objective_value
         # ================== 【新增修改结束】 ==================
 
+
+
+
+
         # 在 return 之前收集信息
         info = {
             "J_val": self._calc_J_X(),  # 当前方案的 J(X)
             "num_assigned": sum([1 for t in self.targets if len(t.locked_by_uavs) > 0]),  # 覆盖目标数
             "is_valid_action": (reward != 0) if action == 1 else None,  # 是否是有效分配
-            # 也可以在这里统计一下当前的平均 p_damage (可选，会增加一点计算量)
+            # 【新增】返回这两个关键物理指标
+            "avg_p_dmg": avg_p_dmg,  # 纯毁伤概率 (如果不考虑障碍物，能打多少分)
+            "avg_p_final": avg_p_final  # 最终概率 (考虑障碍物后，实际打多少分)
         }
 
         return obs, reward, done, info

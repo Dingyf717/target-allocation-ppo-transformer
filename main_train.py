@@ -58,6 +58,7 @@ def train():
         "Episode", "Avg_Reward", "Avg_Q0",  # 基础指标
         "Avg_J_Value", "Max_Coverage",  # 环境物理指标
         "Action1_Ratio", "Valid_Assign_Rate",  # 动作统计
+        "Avg_P_Dmg", "Avg_P_Final",
         "Loss_Critic", "Loss_Actor", "Entropy"  # 训练指标
     ])
     print(f"训练日志将保存至: {csv_path}")
@@ -100,6 +101,9 @@ def train():
         ep_max_cov = 0  # 记录本回合最大覆盖数
         ep_action1_cnt = 0  # 记录尝试 Assign 的次数
         ep_valid_cnt = 0  # 记录有效 Assign 的次数
+        ep_total_p_dmg = 0.0  # 【新增】
+        ep_total_p_final = 0.0  # 【新增】
+        ep_steps_with_assign = 0  # 记录有过分配的步数，避免除以总步数导致数值被稀释
 
         # --- 一个回合 (Episode) ---
         while not done:
@@ -108,10 +112,6 @@ def train():
             # b. step
             next_state, reward, done, info = env.step(action)
 
-            # # 【新增修改】 奖励缩放 (Reward Scaling)
-            # # 将奖励缩小 100 倍，传给 Agent 训练用。
-            # # 这样 Agent 看到的奖励是 0.16，而不是 16.0，Critic 网络更容易拟合。
-            # scaled_reward = reward / 100.0
 
             # c. store
             agent.store_transition(reward, done)
@@ -129,6 +129,11 @@ def train():
                     ep_action1_cnt += 1
                     if info.get('is_valid_action', False):
                         ep_valid_cnt += 1
+
+                if info.get('num_assigned', 0) > 0:
+                    ep_total_p_dmg += info.get('avg_p_dmg', 0)
+                    ep_total_p_final += info.get('avg_p_final', 0)
+                    ep_steps_with_assign += 1
 
             # --- 回合结束后的处理 ---
 
@@ -159,6 +164,14 @@ def train():
             act1_ratio = ep_action1_cnt / max(1, ep_steps)
             valid_rate = ep_valid_cnt / max(1, ep_action1_cnt)
 
+            # 【新增】计算物理概率均值
+            # 注意：分母是“有过分配的步数”，这样能反映“由于分配产生的平均质量”
+            avg_prob_dmg = ep_total_p_dmg / max(1, ep_steps_with_assign)
+            avg_prob_final = ep_total_p_final / max(1, ep_steps_with_assign)
+            # 估算突防概率 (Penetration) = Final / Dmg
+            # 仅用于打印查看，CSV里存原始数据更灵活
+            est_penetration = avg_prob_final / (avg_prob_dmg + 1e-6)
+
             # 2. 获取 Loss (如果本轮没有更新，就用 0.0 或 None 占位)
             l_crt = ppo_stats['loss_critic'] if ppo_stats else 0.0
             l_act = ppo_stats['loss_actor'] if ppo_stats else 0.0
@@ -167,6 +180,7 @@ def train():
             # 3. 打印到控制台 (Console)
             print(f"Ep {i_episode:4d} | R: {avg_reward:6.2f} | J: {avg_J_val:5.2f} | "
                   f"Cov: {ep_max_cov:2d} | Valid%: {valid_rate:4.2f} | "
+                  f"P_Dmg: {avg_prob_dmg:.2f} | P_Pen: {est_penetration:.2f} | "
                   f"L_Crt: {l_crt:6.4f} | Ent: {entr:5.3f}")
 
             # 4. 写入 CSV 文件 (File)
@@ -175,6 +189,7 @@ def train():
                 f"{avg_reward:.4f}", f"{avg_q0:.4f}",
                 f"{avg_J_val:.4f}", ep_max_cov,
                 f"{act1_ratio:.4f}", f"{valid_rate:.4f}",
+                f"{avg_prob_dmg:.4f}", f"{avg_prob_final:.4f}",
                 f"{l_crt:.6f}", f"{l_act:.6f}", f"{entr:.6f}"
             ])
             csv_file.flush()  # 立即写入磁盘，防止中断丢失
