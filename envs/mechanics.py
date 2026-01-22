@@ -82,7 +82,12 @@ def calc_dist_score(dist, is_obstacle=False):
         # 论文中 D_mid = [(x_max^T - x_min^U) + (x_min^T - x_max^U)] / 2
         # 这里为了简化复现且保持稳定，暂时沿用 D_mid = 0 (越近越好)
         # 如果需要严格复现，需要传入 map 边界参数
-        D_mid = 0.0
+        # D_mid = 0.0
+        x_min_u, x_max_u = cfg.UAV_GEN_X_RANGE
+        x_min_t, x_max_t = cfg.TARGET_GEN_X_RANGE
+
+        # 计算 D_mid
+        D_mid = ((x_max_t - x_min_u) + (x_min_t - x_max_u)) / 2.0
         zeta = cfg.PARAM_ZETA_D
 
     score = np.exp(-((dist - D_mid) / zeta) ** 2)
@@ -90,12 +95,16 @@ def calc_dist_score(dist, is_obstacle=False):
 
 
 # --- 论文公式 (4): 毁伤概率 (Damage Probability) ---
-def calc_damage_prob(uav, target):
+def calc_damage_prob(uav, target, nfz_list=None):
     """
     Eq. (4): p_hat = E_angle * (c1 * E_dist + c2 * E_speed) * Load
     注意：这里的 Load 应该是经过天气折损后的实际载荷
     """
-    dist = get_distance(uav.pos, target.pos)
+    if nfz_list is not None:
+        dist = get_detour_distance(uav.pos, target.pos, nfz_list)
+    else:
+        dist = np.linalg.norm(uav.pos - target.pos)
+    # dist = get_distance(uav.pos, target.pos)
     uav_speed = np.linalg.norm(uav.velocity)
     target_speed = np.linalg.norm(target.velocity)  # 假设Target有velocity属性
 
@@ -126,19 +135,28 @@ def calc_penetration_prob(uav, target, nfz_list, interceptor_list):
 
     uav_speed = np.linalg.norm(uav.velocity)
 
-    # 1. 遍历禁飞区 (NFZ)
+    # # 1. 遍历禁飞区 (NFZ)
+    # for nfz in nfz_list:
+    #     # 计算相对于 NFZ 的评价指标
+    #     # 注意：角度指标是 UAV 指向 NFZ 的连线与 UAV 速度的夹角
+    #     E_angle = calc_angle_score(uav.pos, uav.velocity, nfz.pos)
+    #     dist = get_distance(uav.pos, nfz.pos)
+    #     E_dist = calc_dist_score(dist, is_obstacle=True)
+    #
+    #     # Eq. (5)
+    #     # 注意：这里 E_angle 越大(越准)，(1-E_a) 越小，突防率越低 -> 撞上了
+    #     # (1-E_d) 越小(离得近，E_d大)，突防率越低
+    #     p_nfz = (1.0 - E_angle) * (1.0 - E_dist)
+    #     p_pen_total *= np.clip(p_nfz, 0.0, 1.0)
+    # --- 1. 禁飞区 (NFZ) ---
+    # 你的观点：禁飞区不应有角度约束。
+    # 所以这里不再计算 (1-E_angle)*(1-E_dist)。
+    # 只有当 UAV *已经* 在禁飞区内部时，才判定为坠毁 (p=0)
     for nfz in nfz_list:
-        # 计算相对于 NFZ 的评价指标
-        # 注意：角度指标是 UAV 指向 NFZ 的连线与 UAV 速度的夹角
-        E_angle = calc_angle_score(uav.pos, uav.velocity, nfz.pos)
-        dist = get_distance(uav.pos, nfz.pos)
-        E_dist = calc_dist_score(dist, is_obstacle=True)
-
-        # Eq. (5)
-        # 注意：这里 E_angle 越大(越准)，(1-E_a) 越小，突防率越低 -> 撞上了
-        # (1-E_d) 越小(离得近，E_d大)，突防率越低
-        p_nfz = (1.0 - E_angle) * (1.0 - E_dist)
-        p_pen_total *= np.clip(p_nfz, 0.0, 1.0)
+        dist_to_center = np.linalg.norm(uav.pos - nfz.pos)
+        if dist_to_center < nfz.radius:
+            return 0.0  # 直接坠毁
+        # 否则认为可以通过（代价已经体现在 damage_prob 的距离惩罚里了）
 
     # 2. 遍历拦截者 (Interceptor)
     for inter in interceptor_list:
@@ -170,7 +188,7 @@ def calc_advantage(uav, target, nfz_list, interceptor_list):
     返回: (p_final, p_damage_only)
     """
     # 1. 纯毁伤概率 (只看 Target)
-    p_damage = calc_damage_prob(uav, target)
+    p_damage = calc_damage_prob(uav, target, nfz_list)
 
     # 2. 突防概率 (看环境)
     p_pen = calc_penetration_prob(uav, target, nfz_list, interceptor_list)
@@ -239,3 +257,53 @@ def get_state_vector(uav, target, nfz_list, interceptor_list, global_stats=None,
     state[12] /= 16.0
 
     return state
+
+
+def is_segment_intersecting_circle(p1, p2, circle_center, radius):
+    """
+    检测线段 P1-P2 是否穿过圆形区域 (简单几何判断)
+    """
+    p1 = np.array(p1)
+    p2 = np.array(p2)
+    c = np.array(circle_center)
+
+    d_vec = p2 - p1
+    f_vec = p1 - c
+
+    # 二次方程 at^2 + bt + c = 0
+    a = np.dot(d_vec, d_vec)
+    b = 2 * np.dot(f_vec, d_vec)
+    c_val = np.dot(f_vec, f_vec) - radius ** 2
+
+    if a <= 1e-6: return False  # 起点终点重合
+
+    discriminant = b ** 2 - 4 * a * c_val
+    if discriminant < 0:
+        return False  # 无交点
+
+    # 计算交点参数 t
+    t1 = (-b - np.sqrt(discriminant)) / (2 * a)
+    t2 = (-b + np.sqrt(discriminant)) / (2 * a)
+
+    # 如果交点在线段范围内 [0, 1]
+    if (0 <= t1 <= 1) or (0 <= t2 <= 1):
+        return True
+
+    return False
+
+
+def get_detour_distance(uav_pos, target_pos, nfz_list):
+    """
+    计算考虑绕路的有效距离
+    """
+    raw_dist = np.linalg.norm(target_pos - uav_pos)
+    penalty_dist = 0.0
+
+    for nfz in nfz_list:
+        # 如果禁飞区挡在直线上
+        if is_segment_intersecting_circle(uav_pos, target_pos, nfz.pos, nfz.radius):
+            # 简单的绕路估算：增加一个直径的距离惩罚
+            # (也可以用更复杂的切线路径计算，但作为Reward Shaping通常不需要那么精确)
+            penalty_dist += 2.0 * nfz.radius
+
+    return raw_dist + penalty_dist
