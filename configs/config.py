@@ -39,8 +39,8 @@ class Config:
     UAV_GEN_X_RANGE = (60, 90)
     TARGET_GEN_X_RANGE = (160, 180)
 
-    NUM_UAVS = 30
-    NUM_TARGETS = 10
+    NUM_UAVS = 60
+    NUM_TARGETS = 5
 
     # 【修改点 2：减少干扰】
     # 原文是 2 个禁飞区 + 2 个拦截器，且拦截半径大。

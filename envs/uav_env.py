@@ -275,22 +275,22 @@ class UAVEnv(gym.Env):
         """
         J_X = self._calc_J_X()
 
-        # 计算 N0 (覆盖目标数)
-        N0 = 0
-        for tgt in self.targets:
-            if len(tgt.locked_by_uavs) > 0:
-                N0 += 1
+        # # 计算 N0 (覆盖目标数)
+        # N0 = 0
+        # for tgt in self.targets:
+        #     if len(tgt.locked_by_uavs) > 0:
+        #         N0 += 1
+        #
+        # M = len(self.targets)
+        # raw_reward = 0.0
+        #
+        # # Eq. 19
+        # if N0 == M:
+        #     raw_reward = 2.0 * J_X  # 全覆盖翻倍
+        # else:
+        #     raw_reward = J_X * (float(N0) / float(M))  # 覆盖率折损
 
-        M = len(self.targets)
-        raw_reward = 0.0
-
-        # Eq. 19
-        if N0 == M:
-            raw_reward = 2.0 * J_X  # 全覆盖翻倍
-        else:
-            raw_reward = J_X * (float(N0) / float(M))  # 覆盖率折损
-
-        return raw_reward
+        return J_X
 
     def step(self, action):
         curr_uav = self.uavs[self.uav_idx]
@@ -355,12 +355,12 @@ class UAVEnv(gym.Env):
         if self.uav_idx >= len(self.uavs):
             done = True
 
-        # 4. 【Reward Correction】: 引入 Goal Reward (Eq. 20)
-        # 论文 Eq. 20 显示总目标是最大化累积奖励 + 最终目标奖励
-        # 但在 PPO 实现中，通常将最终局面的评分加在最后一步
-        if done:
-            final_r = self._calculate_paper_reward()
-            reward += final_r  # R_goal = r(X_final)
+        # # 4. 【Reward Correction】: 引入 Goal Reward (Eq. 20)
+        # # 论文 Eq. 20 显示总目标是最大化累积奖励 + 最终目标奖励
+        # # 但在 PPO 实现中，通常将最终局面的评分加在最后一步
+        # if done:
+        #     final_r = self._calculate_paper_reward()
+        #     reward += final_r  # R_goal = r(X_final)
 
         # 5. 获取新状态
         # 如果 done=True，_get_obs 通常返回全零或最后状态，根据你的实现逻辑

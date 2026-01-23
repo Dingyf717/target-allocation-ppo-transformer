@@ -1,8 +1,13 @@
 # test_visualize.py
+import os
+import time  # 【新增 1】导入 time 模块
+
+# 【新增 2】解决 OpenMP 冲突报错 (必须在 import torch 之前)
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import os
 from configs.config import cfg
 from envs.uav_env import UAVEnv
 from agents.ppo import PPOAgent
@@ -20,7 +25,12 @@ def visualize_decision(env, agent, model_path):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'), weights_only=True)
 
     agent.policy.load_state_dict(checkpoint)
+
+    # 【关键修复 1】同步权重到 policy_old，防止推理时使用随机参数
+    agent.policy_old.load_state_dict(checkpoint)
+
     agent.policy.eval()
+    agent.policy_old.eval()
 
     state = env.reset()
     done = False
@@ -30,42 +40,52 @@ def visualize_decision(env, agent, model_path):
     print(f"{'决策动作':<30} | {'结果':<8} | {'全队总分 J(X)':<15} | {'本步奖励 Reward'}")
     print("-" * 80)
 
+    # 【新增 3】开始计时
+    start_time = time.time()
+
     while not done:
         # 1. 在 Step 之前获取当前正在做决策的 UAV 和 Target ID
-        # 因为 Step 之后索引会跳到下一个，所以必须先取
         u_id = env.uavs[env.uav_idx].id
         t_id = env.targets[env.target_idx].id
 
         # 2. 神经网络决策
-        action = agent.select_action(state)
+        # 【关键修复 2】使用 predict 进行确定性推理 (需先修改 agents/ppo.py)
+        # 如果你还没修改 ppo.py，请暂时改回 agent.select_action(state)
+        if hasattr(agent, 'predict'):
+            action = agent.predict(state)
+        else:
+            print("警告: PPOAgent 未找到 predict 方法，使用带随机性的 select_action")
+            action = agent.select_action(state)
 
         # 3. 执行环境交互 (获取 info 以读取分数)
         next_state, reward, done, info = env.step(action)
 
         # 4. 打印决策和分数
         if action == 1:
-            # 检查环境是否接受了该分配 (info 中 'is_valid_action' 字段)
-            # 如果 main_train.py 的逻辑是 "new_r < prev_r 则拒绝"，这里可以体现出来
+            # 检查环境是否接受了该分配
             is_valid = info.get('is_valid_action', True)
             status = "✅ 成功" if is_valid else "❌ 拒绝"
 
-            # 只有成功的分配才记录到绘图列表
             if is_valid:
                 assignments.append((u_id, t_id))
 
-            # 获取当前总分
             current_j = info.get('J_val', 0.0)
-
             print(f"UAV-{u_id} 尝试锁定 -> Target-{t_id}    | {status} | {current_j:15.4f} | {reward:+.4f}")
 
         # 更新状态
         state = next_state
+
+    # 【新增 4】结束计时并计算
+    end_time = time.time()
+    total_time = end_time - start_time
 
     # 最终结果打印
     final_j = info.get('J_val', 0.0) if 'info' in locals() else 0.0
     print("-" * 80)
     print(f"决策结束。最终全队总分 J(X): {final_j:.4f}")
     print(f"共生成 {len(assignments)} 个有效攻击对。")
+    print(f"算法推理耗时: {total_time:.4f} 秒 (平均每步: {total_time / 300:.4f}s)")  # 假设最大步数约300
+    print("-" * 80)
 
     plot_results(env, assignments)
 
@@ -87,7 +107,7 @@ def plot_results(env, assignments):
         circle_border = plt.Circle(nfz.pos, nfz.radius, color='black', fill=False, linestyle='--')
         ax.add_patch(circle_border)
 
-    # 3. 画拦截者 (红色X) - 如果有的话
+    # 3. 画拦截者 (红色X)
     for inter in env.interceptors:
         plt.scatter(inter.pos[0], inter.pos[1], c='red', marker='x', s=100, linewidths=2, label='Interceptor')
         circle = plt.Circle(inter.pos, inter.radius, color='red', alpha=0.1)
@@ -134,11 +154,10 @@ if __name__ == "__main__":
         if all_subdirs:
             latest_subdir = max(all_subdirs, key=os.path.getmtime)
 
-            # 这里可以修改为你想要测试的具体模型文件名
-            # model_path = os.path.join(latest_subdir, "best_model.pth")
-            model_path = os.path.join(latest_subdir, "checkpoint_ep600.pth")  # 示例
+            # 优先加载 checkpoint_ep600.pth (根据你的日志这是比较好的模型)
+            # 你可以根据需要修改这里的逻辑
+            model_path = os.path.join(latest_subdir, "checkpoint_ep2000.pth")
 
-            # 如果找不到指定文件，回退去找 best_model
             if not os.path.exists(model_path):
                 print(f"提示: {model_path} 不存在，尝试加载 best_model.pth")
                 model_path = os.path.join(latest_subdir, "best_model.pth")

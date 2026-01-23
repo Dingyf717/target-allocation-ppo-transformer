@@ -52,12 +52,37 @@ class PPOAgent:
     def select_action(self, state):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
+
             action, log_prob, value, _ = self.policy_old.get_action(state)
 
         self.buffer['states'].append(state.cpu())  # Keep on CPU to save GPU memory
         self.buffer['actions'].append(action.cpu())
         self.buffer['logprobs'].append(log_prob.cpu())
         self.buffer['values'].append(value.cpu())
+
+        return action.item()
+
+    def predict(self, state):
+        """
+        用于测试/可视化的确定性推理 (Deterministic Inference)。
+        原理：直接取概率最大的动作 (Argmax)，而不是按概率分布采样 (Sample)。
+        优点：
+        1. 消除随机性，展示模型的最优决策。
+        2. 不会将数据存入 Buffer，避免测试时的内存浪费。
+        """
+        state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            # 1. Actor forward (直接调用 self.policy，确保用的是加载了权重的模型)
+            # 注意：这里的逻辑复刻了 transformer_net.py 中的 get_action 前半部分
+            x = self.policy.actor_net(state)
+
+            # 提取序列最后一个时间步的特征 (与 get_action 保持一致)
+            x = x[:, -1, :]
+
+            logits = self.policy.actor_head(x)
+
+            # 2. Argmax 选择概率最大的动作
+            action = torch.argmax(logits, dim=-1)
 
         return action.item()
 
