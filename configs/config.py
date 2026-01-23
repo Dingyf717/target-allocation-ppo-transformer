@@ -45,8 +45,8 @@ class Config:
     # 【修改点 2：减少干扰】
     # 原文是 2 个禁飞区 + 2 个拦截器，且拦截半径大。
     # 改为 1 个禁飞区 + 1 个拦截器，且拦截半径减小。
-    NUM_NFZ = 1
-    NUM_INTERCEPTORS = 1
+    NUM_NFZ = 3
+    NUM_INTERCEPTORS = 0
     INTERCEPT_RAD = 2.0  # 原 3.0，减小半径更容易绕过
 
     # 成本与权重
